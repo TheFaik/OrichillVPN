@@ -32,11 +32,12 @@ class XUIClient(BaseVPNClient):
     def __init__(self, server: dict):
         """
         Инициализация клиента.
-        
+
         Args:
             server: Словарь с данными сервера из БД
         """
         self.server = server
+        self.server_id = server.get('id')
         self.host = server['host']
         self.port = server['port']
         self.protocol = server.get('protocol', 'https')
@@ -45,13 +46,24 @@ class XUIClient(BaseVPNClient):
         path = server.get('web_base_path', '').strip('/')
         # Теперь добавляем один слеш в начало (если путь не пустой)
         path = f"/{path}" if path else ""
-        
+
         self.base_url = f"{self.protocol}://{self.host}:{self.port}{path}"
-        
+
         self.session: Optional[aiohttp.ClientSession] = None
         self.is_authenticated = False
-        
-        logger.debug(f"Инициализирован XUIClient для {server['name']}: {self.base_url}")
+
+        # Поддержка 3x-ui v3.0+: panel_mode определяется при первом логине.
+        # 'legacy' = v2.x cookie; 'csrf' = v3.0+ cookie + X-CSRF-Token;
+        # 'bearer' = v3.0+ через Authorization: Bearer (минует CSRF).
+        # None = ещё не определялся (нужен probe /csrf-token).
+        self.panel_mode: Optional[str] = None
+        self.csrf_token: Optional[str] = None
+        self.api_token: Optional[str] = server.get('api_token') or None
+
+        logger.debug(
+            f"Инициализирован XUIClient для {server['name']}: {self.base_url} "
+            f"(api_token={'есть' if self.api_token else 'нет'})"
+        )
     
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Создаёт сессию если её нет."""
@@ -68,8 +80,12 @@ class XUIClient(BaseVPNClient):
     async def _reset_session(self) -> None:
         """
         Сбрасывает текущую сессию.
-        
+
         Вызывается при ошибках подключения для пересоздания сессии.
+        CSRF-токен очищается — он привязан к серверной сессии.
+        panel_mode и api_token НЕ сбрасываются — это политика, а не сессионное
+        состояние. Их отдельно сбрасывает _invalidate_api_token() при ротации
+        токена в панели.
         """
         if self.session and not self.session.closed:
             try:
@@ -78,12 +94,161 @@ class XUIClient(BaseVPNClient):
                 logger.debug(f"Ошибка при закрытии сессии: {e}")
         self.session = None
         self.is_authenticated = False
+        self.csrf_token = None
         logger.debug(f"Сессия сброшена для {self.server['name']}")
+
+    async def _invalidate_api_token(self) -> None:
+        """
+        Сбрасывает Bearer-токен (при ротации в панели или 404 на Bearer-запросе).
+
+        Очищает токен в БД (через update_server_api_token), чтобы при следующем
+        запуске бот не пытался использовать невалидный токен.
+        """
+        if self.api_token is None:
+            return
+        self.api_token = None
+        # panel_mode пересоздастся при следующем login() — может оказаться 'csrf'
+        # (если токен протух, но панель всё ещё v3.0+) либо 'bearer' снова (если
+        # фоновый login успеет вытянуть новый токен).
+        self.panel_mode = None
+        if self.server_id is not None:
+            try:
+                from database.db_servers import update_server_api_token
+                update_server_api_token(self.server_id, None)
+            except Exception as e:
+                logger.warning(f"Не удалось очистить api_token в БД для server_id={self.server_id}: {e}")
     
+    async def _detect_panel_version(self) -> tuple:
+        """
+        Определяет версию панели через probe GET /csrf-token.
+
+        - HTTP 200 + JSON.obj → v3.0+ (CSRF middleware активен).
+        - HTTP 404 → v2.x (endpoint не существует).
+        - Любая другая ошибка → считаем legacy (безопасный фолбэк).
+
+        Запрос идёт напрямую через session, без _request, чтобы не зациклиться.
+
+        Returns:
+            Кортеж (mode, csrf_token): ('csrf', '<token>') или ('legacy', None).
+        """
+        session = await self._ensure_session()
+        url = f"{self.base_url}/csrf-token"
+        try:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    try:
+                        data = await resp.json()
+                        token = data.get('obj') if isinstance(data, dict) else None
+                        if isinstance(token, str) and token:
+                            logger.info(f"Обнаружена 3x-ui v3.0+ на {self.server['name']} (CSRF активен)")
+                            return ('csrf', token)
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError):
+                        pass
+                # 404 или прочее — считаем v2.x
+                logger.debug(f"Probe /csrf-token вернул {resp.status}, считаем v2.x legacy режим")
+                return ('legacy', None)
+        except aiohttp.ClientError as e:
+            logger.debug(f"Probe /csrf-token упал ({e}), считаем v2.x legacy режим")
+            return ('legacy', None)
+
+    async def _fetch_api_token(self) -> Optional[str]:
+        """
+        Тянет Bearer-токен с панели v3.0+ через GET /panel/setting/getApiToken.
+
+        Использует уже установленную сессию (cookie) и CSRF-токен.
+        На успехе атомарно сохраняет токен в БД.
+
+        Returns:
+            Токен или None если получить не удалось.
+        """
+        if self.csrf_token is None:
+            logger.debug("Невозможно вытянуть api_token: csrf_token не установлен")
+            return None
+        session = await self._ensure_session()
+        url = f"{self.base_url}/panel/setting/getApiToken"
+        headers = {
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.debug(f"GET /panel/setting/getApiToken вернул {resp.status}")
+                    return None
+                try:
+                    data = await resp.json(content_type=None)
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(data, dict) or not data.get('success'):
+                    return None
+                token = data.get('obj')
+                if not isinstance(token, str) or not token:
+                    return None
+                # Сохраняем в БД
+                if self.server_id is not None:
+                    try:
+                        from database.db_servers import update_server_api_token
+                        update_server_api_token(self.server_id, token)
+                    except Exception as e:
+                        logger.warning(f"Не удалось сохранить api_token в БД: {e}")
+                return token
+        except aiohttp.ClientError as e:
+            logger.debug(f"Ошибка при вытягивании api_token: {e}")
+            return None
+
+    async def _try_bearer_validate(self) -> bool:
+        """
+        Лёгкий probe-запрос для проверки актуальности Bearer-токена.
+
+        Делает GET /panel/api/inbounds/list с Authorization: Bearer.
+        - 200 → токен валиден, переходим в режим 'bearer'.
+        - 404/401 → токен невалиден (ротировали в панели).
+        - Прочее → считаем невалидным.
+
+        Returns:
+            True если токен работает.
+        """
+        if not self.api_token:
+            return False
+        session = await self._ensure_session()
+        url = f"{self.base_url}/panel/api/inbounds/list"
+        headers = {
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "Authorization": f"Bearer {self.api_token}",
+        }
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    return True
+                logger.info(f"Bearer-токен невалиден (HTTP {resp.status}), нужно обновить")
+                return False
+        except aiohttp.ClientError as e:
+            logger.debug(f"Ошибка при проверке Bearer-токена: {e}")
+            return False
+
+    def _build_headers(self, method: str) -> Dict[str, str]:
+        """
+        Собирает HTTP-заголовки в зависимости от panel_mode.
+
+        - legacy: только базовые AJAX-заголовки.
+        - csrf: добавляет X-CSRF-Token для unsafe-методов.
+        - bearer: добавляет Authorization: Bearer (CSRF не нужен).
+        """
+        headers = {
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if self.panel_mode == 'bearer' and self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        elif self.panel_mode == 'csrf' and self.csrf_token and method.upper() not in ('GET', 'HEAD', 'OPTIONS'):
+            headers["X-CSRF-Token"] = self.csrf_token
+        return headers
+
     async def _request(
-        self, 
-        method: str, 
-        endpoint: str, 
+        self,
+        method: str,
+        endpoint: str,
         data: Optional[Dict] = None,
         retry: bool = True,
         log_error: bool = True
@@ -105,16 +270,10 @@ class XUIClient(BaseVPNClient):
         """
         # URL = https://ip:port/secret_path/panel/...
         url = f"{self.base_url}{endpoint}"
-        
-        # Стандартные заголовки для AJAX запросов 3X-UI
-        headers = {
-            "Accept": "application/json",
-            "X-Requested-With": "XMLHttpRequest"
-        }
-        
+
         attempts = RETRY_CONFIG["max_attempts"] if retry else 1
         delays = RETRY_CONFIG["delays"]
-        
+
         for attempt in range(attempts):
             try:
                 # Получаем актуальную сессию (важно, так как она может быть пересоздана в _reset_session)
@@ -123,12 +282,36 @@ class XUIClient(BaseVPNClient):
                 # Если нужна авторизация и мы не авторизованы (и это не запрос логина)
                 if not self.is_authenticated and endpoint != "/login":
                     await self.login()
-                
-                logger.debug(f"API запрос: {method} {url}")
-                
+
+                # Заголовки собираются ПОСЛЕ login() — там определяется panel_mode
+                # и устанавливаются csrf_token/api_token, нужные для _build_headers.
+                headers = self._build_headers(method)
+
+                logger.debug(f"API запрос: {method} {url} (mode={self.panel_mode})")
+
                 async with session.request(method, url, json=data, headers=headers) as response:
                     text = await response.text()
-                    
+
+                    # Bearer протух (ротировали в панели) — обнуляем токен, перелогиниваемся
+                    if response.status in (401, 404) and self.panel_mode == 'bearer':
+                        logger.warning(
+                            f"HTTP {response.status} в режиме bearer — токен невалиден, "
+                            f"переключаемся на обычный логин"
+                        )
+                        await self._invalidate_api_token()
+                        await self._reset_session()
+                        if attempt < attempts - 1:
+                            continue
+
+                    # CSRF-токен устарел (рестарт панели и т.п.) — переподтянуть и повторить
+                    if response.status == 403 and self.panel_mode == 'csrf':
+                        logger.info("HTTP 403 в режиме csrf — переподтягиваем CSRF-токен")
+                        mode, token = await self._detect_panel_version()
+                        if mode == 'csrf':
+                            self.csrf_token = token
+                            if attempt < attempts - 1:
+                                continue
+
                     # Обработка статусов
                     if response.status == 200:
                         try:
@@ -196,43 +379,99 @@ class XUIClient(BaseVPNClient):
 
     async def login(self) -> bool:
         """
-        Авторизация в панели 3X-UI.
-        
+        Авторизация в панели 3X-UI с авто-определением версии (v2.x vs v3.0+).
+
+        Алгоритм:
+        1. Если есть сохранённый api_token — пробуем Bearer-валидацию (без логина).
+           На успехе ставим panel_mode='bearer' и выходим. На неудаче — обнуляем токен.
+        2. Probe GET /csrf-token → 200 значит v3.0+, 404 значит v2.x.
+        3. На v3.0+: логинимся с заголовком X-CSRF-Token, затем тянем api_token
+           через GET /panel/setting/getApiToken и переходим в режим 'bearer'.
+        4. На v2.x: обычный POST /login без CSRF.
+
         Returns:
             True при успешной авторизации
-            
+
         Raises:
             VPNAPIError: При ошибке авторизации
         """
         logger.info(f"Авторизация на {self.server['name']}...")
-        
+
+        # === Шаг 1: пробуем Bearer, если токен уже сохранён ===
+        if self.api_token:
+            if await self._try_bearer_validate():
+                self.panel_mode = 'bearer'
+                self.is_authenticated = True
+                logger.info(f"✅ Авторизация через Bearer-токен (v3.0+) на {self.server['name']}")
+                return True
+            # Bearer не сработал — токен протух, чистим и переходим к обычному логину
+            await self._invalidate_api_token()
+
+        # === Шаг 2: определяем версию через probe /csrf-token ===
+        mode, csrf_token = await self._detect_panel_version()
+        self.panel_mode = mode
+        self.csrf_token = csrf_token  # None для legacy, строка для csrf
+
+        # === Шаг 3: обычный POST /login ===
         session = await self._ensure_session()
         url = f"{self.base_url}/login"
-        
+        login_headers = {
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if mode == 'csrf' and csrf_token:
+            login_headers["X-CSRF-Token"] = csrf_token
+
         try:
-            async with session.post(url, json={
-                "username": self.server["login"],
-                "password": self.server["password"]
-            }) as resp:
+            async with session.post(
+                url,
+                json={
+                    "username": self.server["login"],
+                    "password": self.server["password"],
+                },
+                headers=login_headers,
+            ) as resp:
                 text = await resp.text()
                 if resp.status == 200:
                     data = json.loads(text)
                     if data.get("success"):
                         self.is_authenticated = True
-                        logger.info("✅ Успешная авторизация")
-                        return True
+                        logger.info(f"✅ Успешная авторизация на {self.server['name']} (режим={mode})")
                     else:
                         raise VPNAPIError(f"Ошибка логина: {data.get('msg')}")
-                if resp.status == 404:
+                elif resp.status == 404:
                     raise VPNAPIError(f"Панель недоступна по пути {self.server['web_base_path']}")
+                elif resp.status == 403:
+                    raise VPNAPIError("Ошибка CSRF при логине (HTTP 403). Возможно, панель v3.0+ требует X-CSRF-Token")
                 else:
                     raise VPNAPIError(f"HTTP {resp.status} при логине")
         except aiohttp.ClientConnectorError:
-            raise VPNAPIError(f"Не удалось подключиться к {self.server.get('protocol', 'https')}://{self.server['host']}:{self.server['port']}")
+            raise VPNAPIError(
+                f"Не удалось подключиться к {self.server.get('protocol', 'https')}://"
+                f"{self.server['host']}:{self.server['port']}"
+            )
         except asyncio.TimeoutError:
             raise VPNAPIError("Таймаут при логине")
         except json.JSONDecodeError:
             raise VPNAPIError("Некорректный ответ при логине")
+
+        # === Шаг 4: на v3.0+ автоматически вытягиваем api_token и переходим в bearer ===
+        if mode == 'csrf':
+            token = await self._fetch_api_token()
+            if token:
+                self.api_token = token
+                self.panel_mode = 'bearer'
+                logger.info(
+                    f"🔑 Вытянут api_token с {self.server['name']}, "
+                    f"переключаемся на Bearer-режим (v3.0+)"
+                )
+            else:
+                logger.info(
+                    f"Не удалось вытянуть api_token с {self.server['name']}, "
+                    f"остаёмся в режиме csrf (cookie + X-CSRF-Token)"
+                )
+
+        return True
 
     async def get_inbounds(self) -> List[Dict[str, Any]]:
         """
@@ -979,16 +1218,19 @@ class XUIClient(BaseVPNClient):
             VPNAPIError: При ошибке скачивания
         """
         session = await self._ensure_session()
-        
+
         # Авторизуемся если нужно
         if not self.is_authenticated:
             await self.login()
-        
+
         headers = {
             "Accept": "application/octet-stream",
             "X-Requested-With": "XMLHttpRequest"
         }
-        
+        # На v3.0+ через Bearer — обходим необходимость в cookie + CSRF
+        if self.panel_mode == 'bearer' and self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+
         # Разные версии X-UI / 3X-UI используют разные пути для скачивания БД
         endpoints = [
             "/panel/api/server/getDb",

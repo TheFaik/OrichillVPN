@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 26
+LATEST_VERSION = 27
 
 
 def get_current_version() -> int:
@@ -763,12 +763,27 @@ def migration_26(conn):
     logger.info("Миграция v26 применена: добавлены настройки daily_tasks_time и update_check_time")
 
 
+def migration_27(conn):
+    """
+    Миграция v27: добавление колонки api_token в servers для поддержки 3x-ui v3.0+.
+
+    На v3.0+ панель требует CSRF-токен на всех POST-запросах, но имеет альтернативу —
+    Bearer-токен через заголовок Authorization, который полностью обходит CSRF.
+    Бот автоматически вытягивает токен через GET /panel/setting/getApiToken после
+    первого успешного логина на v3.0+ панель и сохраняет его в это поле.
+    Для v2.x панелей поле остаётся NULL — используется старый cookie-flow.
+    """
+    _add_column(conn, "servers", "api_token TEXT")
+    logger.info("Миграция v27 применена: добавлена колонка servers.api_token для 3x-ui v3.0+")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
     24: migration_24,
     25: migration_25,
     26: migration_26,
+    27: migration_27,
 }
 
 

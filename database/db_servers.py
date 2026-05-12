@@ -15,6 +15,7 @@ __all__ = [
     'add_server',
     'update_server',
     'update_server_field',
+    'update_server_api_token',
     'delete_server',
     'toggle_server_active',
 ]
@@ -22,13 +23,13 @@ __all__ = [
 def get_all_servers() -> List[Dict[str, Any]]:
     """
     Получает список всех VPN-серверов.
-    
+
     Returns:
         Список словарей с данными серверов
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, api_token
             FROM servers
             ORDER BY id
         """)
@@ -37,16 +38,16 @@ def get_all_servers() -> List[Dict[str, Any]]:
 def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
     """
     Получает сервер по ID.
-    
+
     Args:
         server_id: ID сервера
-        
+
     Returns:
         Словарь с данными сервера или None
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, api_token
             FROM servers
             WHERE id = ?
         """, (server_id,))
@@ -56,13 +57,13 @@ def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
 def get_active_servers() -> List[Dict[str, Any]]:
     """
     Получает список активных VPN-серверов.
-    
+
     Returns:
         Список словарей с данными активных серверов
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, api_token
             FROM servers
             WHERE is_active = 1
             ORDER BY id
@@ -122,7 +123,7 @@ def update_server(server_id: int, **fields) -> bool:
     Returns:
         True если обновление успешно
     """
-    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active', 'protocol'}
+    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active', 'protocol', 'api_token'}
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
     if not fields:
@@ -141,6 +142,35 @@ def update_server(server_id: int, **fields) -> bool:
         if success:
             logger.info(f"Обновлён сервер ID {server_id}: {list(fields.keys())}")
         return success
+
+def update_server_api_token(server_id: int, token: Optional[str]) -> bool:
+    """
+    Атомарно обновляет Bearer-токен сервера (3x-ui v3.0+).
+
+    Передаётся token=None для очистки (например, после ротации токена админом
+    в UI панели — наш сохранённый токен становится невалидным и его надо стереть,
+    чтобы следующий логин подтянул новый).
+
+    Args:
+        server_id: ID сервера
+        token: API-токен из 3x-ui (строка ~48 символов) или None для очистки
+
+    Returns:
+        True если сервер существует
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE servers SET api_token = ? WHERE id = ?",
+            (token, server_id)
+        )
+        success = cursor.rowcount > 0
+        if success:
+            if token:
+                logger.info(f"Сохранён api_token для сервера ID {server_id} (3x-ui v3.0+)")
+            else:
+                logger.info(f"Очищен api_token для сервера ID {server_id}")
+        return success
+
 
 def update_server_field(server_id: int, field: str, value: Any) -> bool:
     """
