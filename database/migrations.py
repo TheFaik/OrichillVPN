@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 28
+LATEST_VERSION = 29
 
 
 def get_current_version() -> int:
@@ -360,8 +360,8 @@ def migration_initial(conn: sqlite3.Connection) -> None:
                 "%тарифы%"
             ),
             'buttons': json.dumps([
-                {"id": "btn_my_keys",  "label": "🔑 Мои ключи",         "color": "primary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
-                {"id": "btn_buy_key",  "label": "💳 Купить ключ",        "color": "primary",   "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_buy"},
+                {"id": "btn_my_keys",  "label": "🔑 Мои ключи",         "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
+                {"id": "btn_buy_key",  "label": "💳 Купить ключ",        "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_buy"},
                 {"id": "btn_trial",    "label": "🎁 Пробная подписка",   "color": "secondary", "row": 1, "col": 0, "is_hidden": True,  "action_type": "internal", "action_value": "cmd_trial"},
                 {"id": "btn_referral", "label": "🔗 Реферальная ссылка",  "color": "secondary", "row": 2, "col": 0, "is_hidden": True,  "action_type": "internal", "action_value": "cmd_referral"},
                 {"id": "btn_help",     "label": "❓ Справка",             "color": "secondary", "row": 2, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_help"},
@@ -806,6 +806,47 @@ def migration_28(conn):
     logger.info("Миграция v28 применена: добавлено vpn_keys.sub_id, индекс server_email, bot_mode='key' (legacy upgrade)")
 
 
+def migration_29(conn):
+    """
+    Миграция v29: обычный стиль дефолтных кнопок главной страницы.
+
+    Меняет только pages.buttons_default для страницы main.
+    pages.buttons_custom не трогается: пользовательские настройки остаются
+    пользовательскими и имеют приоритет при рендеринге.
+    """
+    row = conn.execute("SELECT buttons_default FROM pages WHERE page_key = 'main'").fetchone()
+    if not row:
+        logger.info("Миграция v29: страница main не найдена, пропускаем")
+        return
+
+    try:
+        buttons = json.loads(row["buttons_default"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Миграция v29: buttons_default страницы main не является JSON, пропускаем")
+        return
+
+    if not isinstance(buttons, list):
+        logger.warning("Миграция v29: buttons_default страницы main не является списком, пропускаем")
+        return
+
+    changed = False
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        if button.get("id") in {"btn_my_keys", "btn_buy_key"} and button.get("color") != "secondary":
+            button["color"] = "secondary"
+            changed = True
+
+    if changed:
+        conn.execute(
+            "UPDATE pages SET buttons_default = ? WHERE page_key = 'main'",
+            (json.dumps(buttons, ensure_ascii=False),)
+        )
+        logger.info("Миграция v29: дефолтные кнопки main переведены в обычный стиль")
+    else:
+        logger.info("Миграция v29: дефолтные кнопки main уже в обычном стиле")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -814,6 +855,7 @@ MIGRATIONS = {
     26: migration_26,
     27: migration_27,
     28: migration_28,
+    29: migration_29,
 }
 
 
