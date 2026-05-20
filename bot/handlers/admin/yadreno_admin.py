@@ -339,6 +339,14 @@ def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") ->
     """Формирует запрос агенту с точным контекстом страницы."""
     row = get_page(page_key) or {}
     page_data = get_page_data(page_key) or {}
+    placeholder_hint = (
+        "Плейсхолдеры страницы key_delivery:\n"
+        "- %ключ% — ссылка или ключ в моноширинном виде для копирования.\n"
+        "- %ссылка% — чистая ссылка без code/pre; HTTP/HTTPS subscription-ссылка будет кликабельной в Telegram.\n\n"
+        "Медиа у key_delivery — динамический QR-код, pages.image_custom для этой страницы не используется.\n\n"
+        if page_key == 'key_delivery'
+        else ""
+    )
     attachment_block = (
         f"\n{attachment_context}\n"
         if attachment_context
@@ -348,6 +356,7 @@ def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") ->
         "Команда /yaa вызвана администратором прямо на пользовательской странице VPN-бота.\n"
         f"Текущая страница: {page_key}\n"
         "Считай, что пользователь говорит именно про эту страницу, даже если не назвал её явно.\n\n"
+        f"{placeholder_hint}"
         "Текущее состояние страницы в БД:\n"
         f"- text_default: {row.get('text_default') or ''}\n"
         f"- text_custom: {row.get('text_custom') or ''}\n"
@@ -437,6 +446,11 @@ async def handle_yaa_command(message: Message, command: CommandObject):
             await progress.final_target.delete()
         except Exception:
             pass
+        if page_context.page_key == 'key_delivery':
+            from bot.utils.key_sender import rerender_key_delivery_page_context
+
+            if await rerender_key_delivery_page_context(page_context, message.from_user.id):
+                return
         await render_page(
             page_context.message,
             page_key=page_context.page_key,

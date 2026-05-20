@@ -277,6 +277,25 @@ def _resolve_button_style(color: Optional[str]) -> Optional[str]:
     return None
 
 
+def build_page_keyboard(
+    page_key: str,
+    visibility: Optional[Dict[str, bool]] = None,
+    context: Optional[Dict] = None,
+    append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+) -> Optional[InlineKeyboardMarkup]:
+    """Собирает клавиатуру страницы из таблицы pages без отправки сообщения."""
+    page_data = get_page_data(page_key)
+    if page_data is None:
+        return None
+
+    return _build_keyboard(
+        buttons=page_data["buttons"],
+        visibility=visibility,
+        context=context,
+        append_buttons=append_buttons,
+    )
+
+
 async def render_page(
     target,
     page_key: str,

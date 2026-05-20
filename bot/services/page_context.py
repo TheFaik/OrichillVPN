@@ -19,6 +19,7 @@ SUPPORTED_YAA_PAGE_KEYS = frozenset({
     'trial',
     'prepayment',
     'referral',
+    'key_delivery',
 })
 
 
