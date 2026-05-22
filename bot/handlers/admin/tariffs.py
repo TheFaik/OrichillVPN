@@ -145,7 +145,7 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
     
     # Лимит устройств
     max_ips = tariff.get('max_ips', 1)
-    ips_text = f"{max_ips} устр." if max_ips > 0 else "Безлимит"
+    ips_text = f"{max_ips} устр."
     lines.append(f"💻 Лимит устройств: <code>{ips_text}</code>")
     
     # Группа (показываем только если > 1 группы)
@@ -234,6 +234,7 @@ ADD_TARIFF_STATES = [
 def get_add_step_state(step: int) -> AdminStates:
     """Возвращает состояние для шага добавления."""
     params = get_tariff_params_list()
+    params = [p for p in params if p['key'] != 'display_order']
     if step <= 0:
         return ADD_TARIFF_STATES[0]
     if step > len(params):
@@ -467,7 +468,7 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
         
         # Лимит устройств
         max_ips = tariff_data.get('max_ips', 1)
-        ips_text = f"{max_ips} устр." if max_ips > 0 else "Безлимит"
+        ips_text = f"{max_ips} устр."
         lines.append(f"💻 Лимит устройств: <code>{ips_text}</code>")
         
         lines.append("\nСохранить тариф?")

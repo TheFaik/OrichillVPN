@@ -223,21 +223,21 @@ TARIFF_PARAMS = [
         "format": lambda x: f"{x} ГБ" if x > 0 else "Безлимит"
     },
     {
+        "key": "max_ips",
+        "label": "Лимит устройств (IP)",
+        "hint": "Минимум 1 (ограничение по IP адресам)",
+        "validate": lambda x: x.isdigit() and 1 <= int(x) <= 999,
+        "error": "Введите число от 1 до 999",
+        "convert": int,
+        "format": lambda x: f"{x} устр."
+    },
+    {
         "key": "display_order",
         "label": "Порядок отображения",
         "hint": "меньше = выше в списке (0-99)",
         "validate": lambda x: x.isdigit() and 0 <= int(x) <= 99,
         "error": "Порядок от 0 до 99",
         "convert": int
-    },
-    {
-        "key": "max_ips",
-        "label": "Лимит устройств (IP)",
-        "hint": "0 = безлимит, 1 = 1 устройство",
-        "validate": lambda x: x.isdigit() and 0 <= int(x) <= 999,
-        "error": "Введите число от 0 до 999 (0 = безлимит)",
-        "convert": int,
-        "format": lambda x: f"{x} устр." if x > 0 else "Безлимит"
     },
 ]
 
