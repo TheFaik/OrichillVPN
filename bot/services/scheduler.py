@@ -673,7 +673,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
         update_key_traffic_limit,
         get_tariff_by_id
     )
-    from bot.services.vpn_api import push_key_to_panel
+    from bot.services.vpn_api import sync_key_to_panel_state
     
     reset_enabled = get_setting('monthly_traffic_reset_enabled', '0') == '1'
     
@@ -700,7 +700,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                 reset_key_traffic_notification(key['id'])
                 
                 # Пушим на панель (сброс up/down + правильные данные из БД)
-                await push_key_to_panel(key['id'], reset_traffic=True)
+                await sync_key_to_panel_state(key['id'], reset_traffic=True)
                 reset_success += 1
             except Exception as e:
                 reset_errors += 1
@@ -781,7 +781,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                         already_pushed = reset_enabled and (traffic_limit > 0)
                         if not already_pushed:
                             try:
-                                await push_key_to_panel(key['id'])
+                                await sync_key_to_panel_state(key['id'])
                                 sync_fixed += 1
                             except Exception as e:
                                 sync_errors += 1

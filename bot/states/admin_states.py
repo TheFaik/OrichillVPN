@@ -77,6 +77,7 @@ class AdminStates(StatesGroup):
     add_tariff_price_rub = State()   # Шаг 4: Цена в рублях (карты)
     add_tariff_duration = State()    # Шаг 5: Длительность
     add_tariff_traffic_limit = State() # Шаг 6: Лимит трафика (ГБ)
+    add_tariff_max_ips = State()     # Шаг 7: Лимит устройств (IP)
     add_tariff_confirm = State()     # Подтверждение
 
     # ========== Редактирование тарифа ==========
@@ -228,6 +229,15 @@ TARIFF_PARAMS = [
         "validate": lambda x: x.isdigit() and 0 <= int(x) <= 99,
         "error": "Порядок от 0 до 99",
         "convert": int
+    },
+    {
+        "key": "max_ips",
+        "label": "Лимит устройств (IP)",
+        "hint": "0 = безлимит, 1 = 1 устройство",
+        "validate": lambda x: x.isdigit() and 0 <= int(x) <= 999,
+        "error": "Введите число от 0 до 999 (0 = безлимит)",
+        "convert": int,
+        "format": lambda x: f"{x} устр." if x > 0 else "Безлимит"
     },
 ]
 

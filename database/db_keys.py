@@ -101,17 +101,21 @@ def extend_vpn_key(key_id: int, days: int) -> bool:
         True если успешно
     """
     with get_db() as conn:
+        modifier = f"{days:+} days"
         cursor = conn.execute("""
             UPDATE vpn_keys 
-            SET expires_at = datetime(
-                CASE 
-                    WHEN expires_at > datetime('now') THEN expires_at
-                    ELSE datetime('now')
-                END, 
-                '+' || ? || ' days'
+            SET expires_at = MAX(
+                datetime('now'),
+                datetime(
+                    CASE 
+                        WHEN expires_at > datetime('now') THEN expires_at
+                        ELSE datetime('now')
+                    END, 
+                    ?
+                )
             )
             WHERE id = ?
-        """, (days, key_id))
+        """, (modifier, key_id))
         success = cursor.rowcount > 0
         if success:
             logger.info(f"Ключ ID {key_id} продлён на {days} дней")

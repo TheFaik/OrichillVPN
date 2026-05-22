@@ -144,9 +144,9 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
     
     При оплате балансом реферальные вознаграждения НЕ начисляются.
     """
-    from database.requests import get_user_internal_id, get_user_balance, deduct_from_balance, get_tariff_by_id, get_or_create_user, create_initial_vpn_key, extend_vpn_key
+    from database.requests import get_user_internal_id, get_user_balance, deduct_from_balance, get_tariff_by_id, get_or_create_user, create_initial_vpn_key
     from bot.services.user_locks import user_locks
-    from bot.services.vpn_api import push_key_to_panel, restore_traffic_limit_in_db
+    from bot.services.key_lifecycle import renew_key_access
     data = await state.get_data()
     balance_to_deduct = data.get('balance_to_deduct', 0)
     tariff_price_cents = data.get('tariff_price_cents', 0)
@@ -175,12 +175,9 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
             return
         actual_deduct = min(current_balance, tariff_price_cents)
         deduct_from_balance(user_internal_id, actual_deduct)
+        renew_result = None
         if key_id:
-            extend_vpn_key(key_id, days)
-            # Восстанавливаем лимит трафика в БД
-            restore_traffic_limit_in_db(key_id)
-            # Пушим ВСЕ данные из БД на панель (сброс up/down + обновление)
-            await push_key_to_panel(key_id, reset_traffic=True)
+            renew_result = await renew_key_access(key_id, days, reset_traffic=True)
             logger.info(f'Ключ {key_id} продлён на {days} дней за баланс {actual_deduct} коп')
         else:
             traffic_limit_bytes = (tariff.get('traffic_limit_gb', 0) or 0) * 1024 ** 3
@@ -197,7 +194,10 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
     
     if key_id:
         # Продление — ключ уже на сервере, просто сообщаем
-        await safe_edit_or_send(callback.message, f'✅ <b>Оплата успешно завершена!</b>\n\nС вашего баланса списано {price_str}\nКлюч продлён на {days} дн.', reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text='🈴 На главную', callback_data='start')).as_markup())
+        text = f'✅ <b>Оплата успешно завершена!</b>\n\nС вашего баланса списано {price_str}\nКлюч продлён на {days} дн.'
+        if renew_result and not renew_result['panel_synced']:
+            text += '\n\n⚠️ Доступ продлён в БД, но панель синхронизирована не полностью. Если подключение не обновилось сразу, повторите позже или обратитесь в поддержку.'
+        await safe_edit_or_send(callback.message, text, reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text='🈴 На главную', callback_data='start')).as_markup())
     else:
         # Новый ключ — нужно настроить (выбор сервера/inbound)
         from bot.handlers.user.payments.base import finalize_payment_ui

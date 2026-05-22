@@ -30,6 +30,7 @@ PAGE_KEYS = (
     'help',
     'trial',
     'prepayment',
+    'renew_payment',
     'referral',
     'key_delivery',
 )

@@ -1119,14 +1119,17 @@ class XUIClient(BaseVPNClient):
         client_uuid: str,
         email: str,
         expiry_time_ms: int,
-        total_gb_bytes: int
+        total_gb_bytes: int,
+        enable: Optional[bool] = None,
+        sub_id: Optional[str] = None,
     ) -> bool:
         """
         Обновляет ВСЕ параметры клиента на панели данными из нашей БД.
         Единственная функция записи на панель (кроме создания/удаления).
         
-        Протокольные поля (flow, subId, limitIp, tgId) читаются с панели,
-        но expiryTime и totalGB ВСЕГДА берутся из параметров (из нашей БД).
+        Протокольные поля (flow, limitIp, tgId) читаются с панели,
+        но expiryTime, totalGB, enable и subId при явной передаче берутся
+        из параметров (из нашей БД).
         
         Args:
             inbound_id: ID inbound-подключения
@@ -1134,6 +1137,8 @@ class XUIClient(BaseVPNClient):
             email: Email/идентификатор клиента
             expiry_time_ms: Срок действия в миллисекундах (из нашей БД, 0 = бессрочный)
             total_gb_bytes: Лимит трафика в байтах (из нашей БД, 0 = безлимит)
+            enable: Явный статус клиента. None = сохранить текущее значение панели
+            sub_id: Явный subscription ID. None = сохранить текущее значение панели
             
         Returns:
             True при успешном обновлении
@@ -1166,9 +1171,9 @@ class XUIClient(BaseVPNClient):
             "limitIp": target_client.get('limitIp', 1),
             "totalGB": total_gb_bytes,          # ← Из нашей БД!
             "expiryTime": expiry_time_ms,        # ← Из нашей БД!
-            "enable": target_client.get('enable', True),
+            "enable": target_client.get('enable', True) if enable is None else enable,
             "tgId": target_client.get('tgId', ''),
-            "subId": target_client.get('subId', ''),
+            "subId": target_client.get('subId', '') if sub_id is None else sub_id,
             "reset": 0  # Не используем auto-reset панели
         }
         
@@ -1187,7 +1192,10 @@ class XUIClient(BaseVPNClient):
         from datetime import datetime
         expiry_str = datetime.fromtimestamp(expiry_time_ms / 1000).strftime('%Y-%m-%d %H:%M') if expiry_time_ms > 0 else '∞'
         limit_str = f"{total_gb_bytes / 1024**3:.1f} ГБ" if total_gb_bytes > 0 else '∞'
-        logger.info(f"Обновлён клиент {email}: expiry={expiry_str}, limit={limit_str}")
+        logger.info(
+            f"Обновлён клиент {email}: expiry={expiry_str}, "
+            f"limit={limit_str}, enable={updated_client.get('enable')}"
+        )
         return True
 
     async def extend_client_expiry(

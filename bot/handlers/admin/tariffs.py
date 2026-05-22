@@ -143,7 +143,10 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
     traffic_text = f"{traffic_gb} ГБ" if traffic_gb > 0 else "Безлимит"
     lines.append(f"📦 Лимит трафика: <code>{traffic_text}</code>")
     
-
+    # Лимит устройств
+    max_ips = tariff.get('max_ips', 1)
+    ips_text = f"{max_ips} устр." if max_ips > 0 else "Безлимит"
+    lines.append(f"💻 Лимит устройств: <code>{ips_text}</code>")
     
     # Группа (показываем только если > 1 группы)
     groups_count = get_groups_count()
@@ -224,6 +227,7 @@ ADD_TARIFF_STATES = [
     AdminStates.add_tariff_price_rub,
     AdminStates.add_tariff_duration,
     AdminStates.add_tariff_traffic_limit,
+    AdminStates.add_tariff_max_ips,
 ]
 
 
@@ -246,6 +250,7 @@ def get_add_step_state(step: int) -> AdminStates:
         'price_rub': AdminStates.add_tariff_price_rub,
         'duration_days': AdminStates.add_tariff_duration,
         'traffic_limit_gb': AdminStates.add_tariff_traffic_limit,
+        'max_ips': AdminStates.add_tariff_max_ips,
         'display_order': AdminStates.add_tariff_confirm,  # display_order пропускаем при добавлении
     }
     
@@ -460,6 +465,11 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
         traffic_text = f"{traffic_gb} ГБ" if traffic_gb > 0 else "Безлимит"
         lines.append(f"📦 Лимит трафика: <code>{traffic_text}</code>")
         
+        # Лимит устройств
+        max_ips = tariff_data.get('max_ips', 1)
+        ips_text = f"{max_ips} устр." if max_ips > 0 else "Безлимит"
+        lines.append(f"💻 Лимит устройств: <code>{ips_text}</code>")
+        
         lines.append("\nСохранить тариф?")
         
         await safe_edit_or_send(message,
@@ -503,6 +513,11 @@ async def add_tariff_traffic_limit_handler(message: Message, state: FSMContext):
     await process_add_tariff_step(message, state)
 
 
+@router.message(AdminStates.add_tariff_max_ips)
+async def add_tariff_max_ips_handler(message: Message, state: FSMContext):
+    await process_add_tariff_step(message, state)
+
+
 @router.callback_query(F.data == "admin_tariff_add_save")
 async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
     """Сохраняет новый тариф."""
@@ -523,7 +538,8 @@ async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
             price_rub=tariff_data.get('price_rub', 0),
             display_order=0,
             traffic_limit_gb=tariff_data.get('traffic_limit_gb', 0),
-            group_id=selected_group_id
+            group_id=selected_group_id,
+            max_ips=tariff_data.get('max_ips', 1)
         )
         
         await safe_edit_or_send(callback.message, 

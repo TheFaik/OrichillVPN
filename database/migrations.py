@@ -34,7 +34,33 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 29
+LATEST_VERSION = 31
+
+
+def _renew_payment_page_text() -> str:
+    """Дефолтный текст страницы выбора способа оплаты при продлении."""
+    return (
+        "💳 <b>Продление ключа</b>\n\n"
+        "🔑 Ключ: <b>%имяключа%</b>\n\n"
+        "Выберите способ оплаты:"
+    )
+
+
+def _renew_payment_page_buttons() -> str:
+    """Дефолтные кнопки страницы выбора способа оплаты при продлении."""
+    return json.dumps([
+        {"id": "btn_renew_pay_crypto",  "label": "🪙 Оплатить USDT",              "color": "primary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_stars",   "label": "⭐ Оплатить звёздами",          "color": "primary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_cards",   "label": "💳 TG payments",                "color": "primary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_qr",      "label": "📱 ЮКасса (QR/СБП)",            "color": "primary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_wata",    "label": "🌊 WATA (Карта/СБП)",           "color": "primary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_platega", "label": "💸 Platega (СБП)",              "color": "primary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_cardlink", "label": "🔗 Cardlink (Карта/СБП)",      "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_demo",    "label": "🏦 Демо оплата (РФ карта)",     "color": "primary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_balance", "label": "💎 Использовать баланс",        "color": "primary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_back",        "label": "⬅️ Назад",                     "color": "secondary", "row": 9, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_back_main",         "label": "🈴 На главную",                "color": "secondary", "row": 9, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
 
 
 def get_current_version() -> int:
@@ -186,7 +212,8 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             is_active INTEGER DEFAULT 1,
             price_rub INTEGER DEFAULT 0,
             traffic_limit_gb INTEGER DEFAULT 0,
-            group_id INTEGER DEFAULT 1
+            group_id INTEGER DEFAULT 1,
+            max_ips INTEGER DEFAULT 1
         )
     """)
 
@@ -428,6 +455,10 @@ def migration_initial(conn: sqlite3.Connection) -> None:
                 {"id": "btn_pay_balance", "label": "💎 Использовать баланс",    "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
                 {"id": "btn_back_main",   "label": "🈴 На главную",             "color": "secondary", "row": 7, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
             ], ensure_ascii=False),
+        },
+        'renew_payment': {
+            'text': _renew_payment_page_text(),
+            'buttons': _renew_payment_page_buttons(),
         },
         'referral': {
             'text': (
@@ -846,6 +877,48 @@ def migration_29(conn):
     else:
         logger.info("Миграция v29: дефолтные кнопки main уже в обычном стиле")
 
+def migration_30(conn):
+    """
+    Миграция v30: добавление поля max_ips в таблицу tariffs.
+    """
+    try:
+        from config import DEFAULT_LIMIT_IP
+        default_val = DEFAULT_LIMIT_IP
+    except ImportError:
+        default_val = 1
+
+    _add_column(conn, "tariffs", f"max_ips INTEGER DEFAULT {default_val}")
+    logger.info(f"Миграция v30 применена: добавлено поле max_ips в таблицу tariffs (по умолчанию {default_val})")
+
+
+def migration_31(conn):
+    """
+    Миграция v31: перенос выбора способа оплаты при продлении в таблицу pages.
+
+    Создаёт страницу renew_payment с дефолтным текстом и системными кнопками.
+    Кастомные поля text_custom/image_custom/buttons_custom не изменяются.
+    """
+    text_default = _renew_payment_page_text()
+    buttons_default = _renew_payment_page_buttons()
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO pages (page_key, text_default, buttons_default)
+        VALUES ('renew_payment', ?, ?)
+        """,
+        (text_default, buttons_default)
+    )
+    conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?,
+            buttons_default = ?
+        WHERE page_key = 'renew_payment'
+        """,
+        (text_default, buttons_default)
+    )
+    logger.info("Миграция v31 применена: добавлена страница renew_payment")
+
 
 MIGRATIONS = {
     22: migration_22,
@@ -856,6 +929,8 @@ MIGRATIONS = {
     27: migration_27,
     28: migration_28,
     29: migration_29,
+    30: migration_30,
+    31: migration_31,
 }
 
 

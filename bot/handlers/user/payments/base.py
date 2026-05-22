@@ -97,8 +97,8 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
 @router.callback_query(F.data.startswith('renew_invoice_cancel:'))
 async def renew_invoice_cancel_handler(callback: CallbackQuery):
     """Отмена инвойса и возврат к выбору способа оплаты."""
-    from bot.keyboards.user import renew_payment_method_kb
-    from database.requests import get_key_details_for_user, is_crypto_configured, is_stars_enabled, is_cards_enabled, get_user_internal_id, get_setting, is_yookassa_qr_configured, is_referral_enabled, get_referral_reward_type, get_user_balance, is_demo_payment_enabled, is_wata_configured, is_platega_configured, is_cardlink_configured
+    from database.requests import get_key_details_for_user
+    from bot.handlers.user.keys import show_renew_payment_page
     parts = callback.data.split(':')
     key_id = int(parts[1])
     telegram_id = callback.from_user.id
@@ -108,43 +108,5 @@ async def renew_invoice_cancel_handler(callback: CallbackQuery):
         await callback.answer('❌ Ключ не найден', show_alert=True)
         return
 
-    crypto_configured = is_crypto_configured()
-    stars_enabled = is_stars_enabled()
-    cards_enabled = is_cards_enabled()
-    yookassa_qr_enabled = is_yookassa_qr_configured()
-    wata_enabled = is_wata_configured()
-    platega_enabled = is_platega_configured()
-    cardlink_enabled = is_cardlink_configured()
-    demo_enabled = is_demo_payment_enabled()
-
-    if not crypto_configured and (not stars_enabled) and (not cards_enabled) and (not yookassa_qr_enabled) and (not wata_enabled) and (not platega_enabled) and (not cardlink_enabled) and (not demo_enabled):
-        await safe_edit_or_send(callback.message, '😔 Способы оплаты временно недоступны.', force_new=True)
-        return
-
-    user_id = get_user_internal_id(telegram_id)
-                    
-    show_balance_button = False
-    if is_referral_enabled() and get_referral_reward_type() == 'balance':
-        if user_id:
-            balance_cents = get_user_balance(user_id)
-            if balance_cents > 0:
-                show_balance_button = True
-
-    await safe_edit_or_send(
-        callback.message,
-        f"💳 <b>Продление ключа</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите способ оплаты:",
-        reply_markup=renew_payment_method_kb(
-            key_id=key_id,
-            crypto_configured=crypto_configured,
-            stars_enabled=stars_enabled,
-            cards_enabled=cards_enabled,
-            yookassa_qr_enabled=yookassa_qr_enabled,
-            wata_enabled=wata_enabled,
-            platega_enabled=platega_enabled,
-            cardlink_enabled=cardlink_enabled,
-            show_balance_button=show_balance_button,
-            demo_enabled=demo_enabled
-        ),
-        force_new=True
-    )
+    await show_renew_payment_page(callback, key, key_id, force_new=True)
     await callback.answer()

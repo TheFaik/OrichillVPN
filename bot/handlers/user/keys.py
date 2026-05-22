@@ -238,38 +238,69 @@ async def key_show_handler(callback: CallbackQuery):
     await send_key_with_qr(callback, key, key_show_kb(key_id))
     await callback.answer()
 
+
+async def show_renew_payment_page(callback: CallbackQuery, key: dict, key_id: int, force_new: bool = False):
+    """Показывает страницу выбора способа оплаты для продления ключа из pages."""
+    from bot.keyboards.user import back_and_home_kb
+    from bot.utils.action_registry import SYSTEM_BUTTONS
+    from bot.utils.page_renderer import render_page
+
+    telegram_id = callback.from_user.id
+    context = {
+        'key_id': key_id,
+        'telegram_id': telegram_id,
+    }
+    payment_button_ids = (
+        'btn_renew_pay_crypto',
+        'btn_renew_pay_stars',
+        'btn_renew_pay_cards',
+        'btn_renew_pay_qr',
+        'btn_renew_pay_wata',
+        'btn_renew_pay_platega',
+        'btn_renew_pay_cardlink',
+        'btn_renew_pay_demo',
+        'btn_renew_pay_balance',
+    )
+    has_payment_method = any(
+        SYSTEM_BUTTONS[button_id](context) is not None
+        for button_id in payment_button_ids
+    )
+
+    if not has_payment_method:
+        await safe_edit_or_send(
+            callback.message,
+            '💳 <b>Продление ключа</b>\n\n'
+            '😔 Способы оплаты временно недоступны.\n'
+            'Попробуйте позже.',
+            reply_markup=back_and_home_kb(back_callback=f'key:{key_id}'),
+            force_new=force_new,
+        )
+        return
+
+    text_replacements = {
+        '%имяключа%': escape_html(key.get('display_name') or 'VPN-ключ'),
+    }
+
+    await render_page(
+        callback,
+        page_key='renew_payment',
+        context=context,
+        text_replacements=text_replacements,
+        force_new=force_new,
+    )
+
+
 @router.callback_query(F.data.startswith('key_renew:'))
 async def key_renew_select_payment(callback: CallbackQuery):
     """Выбор способа оплаты для продления (сразу, без тарифа)."""
-    from database.requests import get_key_details_for_user, get_user_internal_id, is_crypto_configured, is_stars_enabled, is_cards_enabled, is_referral_enabled, get_referral_reward_type, get_user_balance, is_demo_payment_enabled, is_wata_configured, is_platega_configured, is_cardlink_configured
-    from bot.keyboards.user import renew_payment_method_kb, back_and_home_kb
+    from database.requests import get_key_details_for_user
     key_id = int(callback.data.split(':')[1])
     telegram_id = callback.from_user.id
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
         await callback.answer('❌ Ключ не найден или вы не являетесь его владельцем.', show_alert=True)
         return
-    crypto_configured = is_crypto_configured()
-    stars_enabled = is_stars_enabled()
-    cards_enabled = is_cards_enabled()
-    demo_enabled = is_demo_payment_enabled()
-    wata_enabled = is_wata_configured()
-    platega_enabled = is_platega_configured()
-    cardlink_enabled = is_cardlink_configured()
-    from database.requests import is_yookassa_qr_configured
-    yookassa_qr = is_yookassa_qr_configured()
-    if not crypto_configured and (not stars_enabled) and (not cards_enabled) and (not yookassa_qr) and (not wata_enabled) and (not platega_enabled) and (not cardlink_enabled) and (not demo_enabled):
-        await safe_edit_or_send(callback.message, '💳 <b>Продление ключа</b>\n\n😔 Способы оплаты временно недоступны.\nПопробуйте позже.', reply_markup=back_and_home_kb(back_callback=f'key:{key_id}'))
-        await callback.answer()
-        return
-    user_id = get_user_internal_id(telegram_id)
-    show_balance_button = False
-    if is_referral_enabled() and get_referral_reward_type() == 'balance':
-        if user_id:
-            balance_cents = get_user_balance(user_id)
-            if balance_cents > 0:
-                show_balance_button = True
-    await safe_edit_or_send(callback.message, f"💳 <b>Продление ключа</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите способ оплаты:", reply_markup=renew_payment_method_kb(key_id=key_id, crypto_configured=crypto_configured, stars_enabled=stars_enabled, cards_enabled=cards_enabled, yookassa_qr_enabled=yookassa_qr, wata_enabled=wata_enabled, platega_enabled=platega_enabled, cardlink_enabled=cardlink_enabled, show_balance_button=show_balance_button, demo_enabled=demo_enabled))
+    await show_renew_payment_page(callback, key, key_id)
     await callback.answer()
 
 @router.callback_query(F.data.startswith('key_replace:'))
@@ -441,6 +472,13 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         if days_left < 1:
             days_left = 1
 
+        limit_ip = 1
+        if current_key.get('tariff_id'):
+            from database.db_tariffs import get_tariff_by_id
+            tariff = get_tariff_by_id(current_key['tariff_id'])
+            if tariff:
+                limit_ip = tariff.get('max_ips', 1)
+
         # === 3. Создание нового ===
         if subscription_mode:
             inbounds = await new_client.get_inbounds()
@@ -456,7 +494,7 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                     res = await new_client.add_client(
                         inbound_id=inb['id'], email=new_email,
                         total_gb=limit_gb, expire_days=days_left,
-                        limit_ip=1, enable=True, tg_id=str(telegram_id),
+                        limit_ip=limit_ip, enable=True, tg_id=str(telegram_id),
                         flow=flow, sub_id=new_sub_id,
                     )
                     if inb['id'] == min_inb_id:
@@ -479,7 +517,7 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             res = await new_client.add_client(
                 inbound_id=new_inbound_id, email=new_email,
                 total_gb=limit_gb, expire_days=days_left,
-                limit_ip=1, enable=True, tg_id=str(telegram_id), flow=flow,
+                limit_ip=limit_ip, enable=True, tg_id=str(telegram_id), flow=flow,
             )
             new_uuid = res['uuid']
             # Очищаем sub_id (теперь это keys-mode ключ)
@@ -498,6 +536,11 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                 f'полный тариф {traffic_limit / 1024 ** 3:.1f} ГБ, '
                 f'использовано {traffic_used / 1024 ** 3:.1f} ГБ'
             )
+        if subscription_mode:
+            from bot.services.vpn_api import sync_key_to_panel_state
+            sync_stats = await sync_key_to_panel_state(key_id)
+            if not sync_stats.get('ok'):
+                logger.warning(f"replace_execute: subscription-ключ {key_id} синхронизирован не полностью: {sync_stats}")
 
         await state.clear()
         updated_key = get_key_details_for_user(key_id, telegram_id)

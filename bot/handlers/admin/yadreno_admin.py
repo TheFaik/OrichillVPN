@@ -339,14 +339,19 @@ def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") ->
     """Формирует запрос агенту с точным контекстом страницы."""
     row = get_page(page_key) or {}
     page_data = get_page_data(page_key) or {}
-    placeholder_hint = (
-        "Плейсхолдеры страницы key_delivery:\n"
-        "- %ключ% — ссылка или ключ в моноширинном виде для копирования.\n"
-        "- %ссылка% — чистая ссылка без code/pre; HTTP/HTTPS subscription-ссылка будет кликабельной в Telegram.\n\n"
-        "Медиа у key_delivery — динамический QR-код, pages.image_custom для этой страницы не используется.\n\n"
-        if page_key == 'key_delivery'
-        else ""
-    )
+    placeholder_hint = ""
+    if page_key == 'key_delivery':
+        placeholder_hint = (
+            "Плейсхолдеры страницы key_delivery:\n"
+            "- %ключ% — ссылка или ключ в моноширинном виде для копирования.\n"
+            "- %ссылка% — чистая ссылка без code/pre; HTTP/HTTPS subscription-ссылка будет кликабельной в Telegram.\n\n"
+            "Медиа у key_delivery — динамический QR-код, pages.image_custom для этой страницы не используется.\n\n"
+        )
+    elif page_key == 'renew_payment':
+        placeholder_hint = (
+            "Плейсхолдеры страницы renew_payment:\n"
+            "- %имяключа% — название продлеваемого ключа, уже экранированное для HTML.\n\n"
+        )
     attachment_block = (
         f"\n{attachment_context}\n"
         if attachment_context

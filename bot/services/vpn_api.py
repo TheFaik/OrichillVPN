@@ -9,7 +9,6 @@ import asyncio
 
 from .panels.base import VPNAPIError, BaseVPNClient
 from .panels.xui import XUIClient
-from .panels.marzban import MarzbanClient
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +46,7 @@ def get_client_from_server_data(server: Dict[str, Any]) -> BaseVPNClient:
     if server_id in _clients:
         return _clients[server_id]
         
-    pass_type = server.get('panel_type', 'xui')
-    if pass_type == 'marzban':
-        client = MarzbanClient(server)
-    else:
-        client = XUIClient(server)
+    client = XUIClient(server)
         
     _clients[server_id] = client
     return client
@@ -227,8 +222,8 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     
     if tariff_id:
         tariff = get_tariff_by_id(tariff_id)
-        if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
-            traffic_limit = tariff['traffic_limit_gb'] * (1024**3)
+        if tariff:
+            traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024**3)
     
     # Обнуляем traffic_used и сбрасываем пороги в БД
     reset_key_traffic_notification(key_id)
@@ -261,95 +256,100 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     return True
 
 
-async def push_key_to_panel(key_id: int, reset_traffic: bool = False) -> bool:
-    """
-    Пушит данные ключа из нашей БД на панель 3X-UI.
-    
-    Единственная точка записи на панель. Все данные (expiryTime, totalGB)
-    формируются из нашей БД, а не читаются с панели.
-    
-    Args:
-        key_id: ID ключа в нашей БД
-        reset_traffic: True = обнулить счётчики up/down на панели перед обновлением
-        
-    Returns:
-        True при успешном обновлении, False при ошибке
-    """
-    from database.requests import get_vpn_key_by_id
-    from datetime import datetime
-    
-    key = get_vpn_key_by_id(key_id)
-    if not key or not key.get('server_active'):
-        logger.warning(f'push_key_to_panel: ключ {key_id} не найден или сервер неактивен')
-        return False
-    
-    email = key.get('panel_email')
-    inbound_id = key.get('panel_inbound_id')
-    client_uuid = key.get('client_uuid')
-    
-    if not email or not inbound_id or not client_uuid:
-        logger.warning(f'push_key_to_panel: ключ {key_id} — неполные данные панели')
-        return False
-    
-    # Конвертируем expires_at из БД → expiryTime (ms)
+def _client_identifier(client: Dict[str, Any]) -> str:
+    """Возвращает идентификатор клиента 3X-UI для update/delete."""
+    return client.get('id') or client.get('password') or ''
+
+
+def _key_expiry_time_ms(key: Dict[str, Any]) -> int:
+    """Конвертирует expires_at из БД в expiryTime 3X-UI."""
+    from datetime import datetime, timedelta, timezone
+
     expires_at = key.get('expires_at')
-    if expires_at:
-        from datetime import datetime, timedelta, timezone
-        
-        # Если есть 'Z', убираем/заменяем, парсим
-        dt_str = str(expires_at).replace('Z', '+00:00')
-        dt = datetime.fromisoformat(dt_str)
-        
-        # Убеждаемся что tzinfo установлен (в БД время всегда UTC)
+    if not expires_at:
+        return 0
+
+    try:
+        dt = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-            
-        now_utc = datetime.now(timezone.utc)
-        
-        # Если срок больше 90000 дней (бессрочный)
-        if dt > now_utc + timedelta(days=90000):
-            expiry_time_ms = 0
-        else:
-            expiry_time_ms = int(dt.timestamp() * 1000)
-    else:
-        expiry_time_ms = 0  # Бессрочный
-    
-    # Лимит трафика из БД (уже в байтах)
-    traffic_limit = key.get('traffic_limit', 0) or 0
-    
+
+        if dt > datetime.now(timezone.utc) + timedelta(days=90000):
+            return 0
+        return int(dt.timestamp() * 1000)
+    except (ValueError, TypeError) as e:
+        logger.warning(f"_key_expiry_time_ms: не удалось разобрать expires_at={expires_at!r}: {e}")
+        return 0
+
+
+def _key_days_left_for_add(key: Dict[str, Any]) -> int:
+    """
+    Возвращает положительный срок для add_client.
+
+    3X-UI не принимает создание клиента с 0 или отрицательным сроком, поэтому
+    точное значение потом всё равно выравнивается через update_client_full().
+    """
+    from datetime import datetime, timezone
+    import math
+
+    expires_at = key.get('expires_at')
+    if not expires_at:
+        return 365
+
     try:
-        server_data = {
-            'id': key.get('server_id'),
-            'name': key.get('server_name'),
-            'host': key.get('host'),
-            'port': key.get('port'),
-            'web_base_path': key.get('web_base_path'),
-            'login': key.get('login'),
-            'password': key.get('password')
-        }
-        client = get_client_from_server_data(server_data)
-        
-        # Сброс счётчиков up/down на панели (если требуется)
-        if reset_traffic:
-            await client.reset_client_traffic(inbound_id, email)
-            logger.info(f'Сброшены счётчики трафика ключа {key_id} на панели')
-        
-        # Обновляем ВСЕ данные клиента на панели из нашей БД
-        success = await client.update_client_full(
-            inbound_id=inbound_id,
-            client_uuid=client_uuid,
-            email=email,
-            expiry_time_ms=expiry_time_ms,
-            total_gb_bytes=traffic_limit
-        )
-        
-        if success:
-            logger.info(f'Данные ключа {key_id} ({email}) успешно запушены на панель')
-        return success
-        
-    except Exception as e:
-        logger.error(f'Ошибка пуша ключа {key_id} на панель: {e}')
-        return False
+        dt = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        seconds_left = (dt - datetime.now(timezone.utc)).total_seconds()
+        return max(1, math.ceil(seconds_left / 86400))
+    except (ValueError, TypeError):
+        return 30
+
+
+def _build_server_data_from_key(key: Dict[str, Any]) -> Dict[str, Any]:
+    """Собирает данные сервера из JOIN-строки ключа."""
+    return {
+        'id': key.get('server_id'),
+        'name': key.get('server_name'),
+        'host': key.get('host'),
+        'port': key.get('port'),
+        'web_base_path': key.get('web_base_path'),
+        'login': key.get('login'),
+        'password': key.get('password'),
+        'protocol': key.get('protocol', 'https'),
+        'api_token': key.get('api_token'),
+    }
+
+
+def _parse_clients_by_email(inbounds: List[Dict[str, Any]], email: str) -> Dict[int, Dict[str, Any]]:
+    """Собирает map inbound_id -> client для указанного email."""
+    presence: Dict[int, Dict[str, Any]] = {}
+    for inbound in inbounds:
+        try:
+            settings_raw = inbound.get('settings', '{}')
+            settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for client in settings.get('clients', []):
+            if client.get('email') == email:
+                presence.setdefault(inbound['id'], client)
+    return presence
+
+
+async def push_key_to_panel(key_id: int, reset_traffic: bool = False) -> bool:
+    """
+    Совместимый алиас старой точки записи.
+
+    Новая логика находится в sync_key_to_panel_state(): она умеет обновлять
+    как одиночный ключ, так и все inbound subscription-ключа.
+    """
+    stats = await sync_key_to_panel_state(key_id, reset_traffic=reset_traffic)
+    success = bool(stats.get('ok')) and stats.get('errors', 0) == 0
+    if success:
+        logger.info(f'Данные ключа {key_id} успешно синхронизированы с панелью: {stats}')
+    else:
+        logger.warning(f'Синхронизация ключа {key_id} с панелью завершилась не полностью: {stats}')
+    return success
 
 
 def restore_traffic_limit_in_db(key_id: int) -> bool:
@@ -383,21 +383,20 @@ def restore_traffic_limit_in_db(key_id: int) -> bool:
     
     if tariff_id:
         tariff = get_tariff_by_id(tariff_id)
-        if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
-            traffic_limit = tariff['traffic_limit_gb'] * (1024**3)
+        if tariff:
+            traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024**3)
     
     # Обнуляем traffic_used и пороги уведомлений
     reset_key_traffic_notification(key_id)
     
-    # Обновляем traffic_limit (на случай если тариф менялся)
-    if traffic_limit > 0:
-        update_key_traffic_limit(key_id, traffic_limit)
+    # Обновляем traffic_limit (включая 0, если тариф стал безлимитным)
+    update_key_traffic_limit(key_id, traffic_limit)
     
     logger.info(f'Лимит трафика ключа {key_id} восстановлен в БД: {traffic_limit / 1024**3:.1f} ГБ')
     return True
 
 
-async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
+async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = False) -> Dict[str, int]:
     """
     Приводит набор клиентов с key.panel_email на key.server_id в соответствие
     с текущим bot_mode и состоянием ключа в БД.
@@ -408,9 +407,9 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
         Если у ключа sub_id IS NULL — генерирует (или подхватывает существующий
         subId из найденного клиента на панели) и сохраняет в БД.
       - Обновляет vpn_keys.panel_inbound_id и client_uuid на минимальный inbound.
-      - Если traffic_exhausted ИЛИ expired — set_clients_enabled_by_email(False)
-        для всех клиентов с этим email.
-      - Если ключ активен — set_clients_enabled_by_email(True).
+      - Обновляет expiryTime, totalGB, enable и subId у всех клиентов с этим email.
+      - Если traffic_exhausted ИЛИ expired — выставляет enable=False.
+      - Если ключ активен — выставляет enable=True.
 
     Режим 'key':
       - Оставляет клиента в МИНИМАЛЬНОМ inbound, остальных с тем же email удаляет.
@@ -418,11 +417,22 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
 
     Args:
         key_id: ID ключа в БД
+        reset_traffic: True = сбросить up/down на панели перед записью состояния
 
     Returns:
-        Словарь со статистикой: {'created', 'deleted', 'enabled', 'disabled'}
+        Словарь со статистикой: {'created', 'deleted', 'enabled', 'disabled',
+        'updated', 'reset', 'errors', 'ok'}
     """
-    stats = {'created': 0, 'deleted': 0, 'enabled': 0, 'disabled': 0}
+    stats = {
+        'created': 0,
+        'deleted': 0,
+        'enabled': 0,
+        'disabled': 0,
+        'updated': 0,
+        'reset': 0,
+        'errors': 0,
+        'ok': 0,
+    }
 
     lock = _ensure_locks.setdefault(key_id, asyncio.Lock())
     async with lock:
@@ -442,17 +452,7 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
         if not email or not server_id:
             return stats
 
-        server_data = {
-            'id': server_id,
-            'name': key.get('server_name'),
-            'host': key.get('host'),
-            'port': key.get('port'),
-            'web_base_path': key.get('web_base_path'),
-            'login': key.get('login'),
-            'password': key.get('password'),
-            'protocol': key.get('protocol', 'https'),
-            'api_token': key.get('api_token'),
-        }
+        server_data = _build_server_data_from_key(key)
 
         try:
             client = get_client_from_server_data(server_data)
@@ -464,19 +464,11 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
         if not inbounds:
             return stats
 
-        # presence: inbound_id -> client_obj
-        presence: Dict[int, Dict[str, Any]] = {}
-        for inb in inbounds:
-            try:
-                settings_raw = inb.get('settings', '{}')
-                settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
-            except (json.JSONDecodeError, TypeError):
-                continue
-            for cl in settings.get('clients', []):
-                if cl.get('email') == email:
-                    presence.setdefault(inb['id'], cl)
-
+        presence = _parse_clients_by_email(inbounds, email)
         mode = get_bot_mode()
+        expiry_time_ms = _key_expiry_time_ms(key)
+        traffic_limit = key.get('traffic_limit', 0) or 0
+        active = is_key_active(key) and not is_traffic_exhausted(key)
 
         if mode == 'subscription':
             # Гарантируем sub_id у ключа
@@ -494,24 +486,21 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
                 key['sub_id'] = sub_id
 
             # Параметры для add_client в отсутствующих inbound
-            from datetime import datetime, timezone
-            traffic_limit = key.get('traffic_limit', 0) or 0
             total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
-
-            expires_at = key.get('expires_at')
-            if expires_at:
+            days_left = _key_days_left_for_add(key)
+            
+            limit_ip = 1
+            if key.get('tariff_id'):
+                from database.db_tariffs import get_tariff_by_id
                 try:
-                    dt = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    delta = dt - datetime.now(timezone.utc)
-                    days_left = max(1, int(delta.total_seconds() / 86400) + (1 if delta.seconds else 0))
-                except Exception:
-                    days_left = 30
-            else:
-                days_left = 0
-
-            active = is_key_active(key) and not is_traffic_exhausted(key)
+                    tariff = get_tariff_by_id(key['tariff_id'])
+                    if tariff:
+                        limit_ip = tariff.get('max_ips', 1)
+                except Exception as e:
+                    logger.warning(
+                        f"ensure_subscription_keys: не удалось получить тариф "
+                        f"{key.get('tariff_id')} для limitIp, используется 1: {e}"
+                    )
 
             # Создаём в отсутствующих inbound
             missing = [inb for inb in inbounds if inb['id'] not in presence]
@@ -523,7 +512,7 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
                         email=email,
                         total_gb=total_gb,
                         expire_days=days_left if days_left > 0 else 365,
-                        limit_ip=1,
+                        limit_ip=limit_ip,
                         enable=active,
                         tg_id=str(key.get('telegram_id') or ''),
                         flow=flow,
@@ -542,6 +531,7 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
                         f"ensure_subscription_keys: не удалось создать клиента {email} "
                         f"в inbound {inb['id']} сервера {server_id}: {e}"
                     )
+                    stats['errors'] += 1
 
             # Обновляем panel_inbound_id/client_uuid на МИНИМАЛЬНЫЙ присутствующий inbound
             if presence:
@@ -559,63 +549,78 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
                         sub_id=sub_id,
                     )
 
-            # Включить/отключить всех клиентов по состоянию ключа
+            # Сбрасываем трафик и выравниваем ВСЕ существующие клиенты подписки.
             target_enable = active
-            need_change = any(
-                bool(cl.get('enable', True)) != target_enable
-                for cl in presence.values()
-            )
-            if need_change:
+            for inb_id, cl in sorted(presence.items()):
+                cid = _client_identifier(cl)
+                if not cid:
+                    stats['errors'] += 1
+                    continue
+                if reset_traffic:
+                    try:
+                        await client.reset_client_traffic(inb_id, email)
+                        stats['reset'] += 1
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys: не удалось сбросить трафик {email} "
+                            f"в inbound {inb_id}: {e}"
+                        )
                 try:
-                    cnt = await client.set_clients_enabled_by_email(email, target_enable)
-                    if target_enable:
-                        stats['enabled'] += cnt
-                    else:
-                        stats['disabled'] += cnt
+                    await client.update_client_full(
+                        inbound_id=inb_id,
+                        client_uuid=cid,
+                        email=email,
+                        expiry_time_ms=expiry_time_ms,
+                        total_gb_bytes=traffic_limit,
+                        enable=target_enable,
+                        sub_id=sub_id,
+                    )
+                    stats['updated'] += 1
+                    if bool(cl.get('enable', True)) != target_enable:
+                        if target_enable:
+                            stats['enabled'] += 1
+                        else:
+                            stats['disabled'] += 1
                 except Exception as e:
+                    stats['errors'] += 1
                     logger.warning(
-                        f"ensure_subscription_keys: не удалось переключить enable={target_enable} "
-                        f"для {email} на сервере {server_id}: {e}"
+                        f"ensure_subscription_keys: не удалось обновить клиента {email} "
+                        f"в inbound {inb_id} сервера {server_id}: {e}"
                     )
 
         else:  # mode == 'key'
-            if len(presence) <= 1:
-                # Уже один или ноль клиентов — обновим только panel_inbound_id если нужно
-                if presence:
-                    min_inb_id = min(presence.keys())
-                    min_client = presence[min_inb_id]
-                    uuid_or_pwd = min_client.get('id') or min_client.get('password') or ''
-                    if (key.get('panel_inbound_id') != min_inb_id
-                            or (key.get('client_uuid') or '') != uuid_or_pwd):
-                        update_vpn_key_config(
-                            key_id=key_id,
-                            server_id=server_id,
-                            panel_inbound_id=min_inb_id,
-                            panel_email=email,
-                            client_uuid=uuid_or_pwd,
+            if not presence and key.get('panel_inbound_id') and key.get('client_uuid'):
+                presence[int(key['panel_inbound_id'])] = {
+                    'email': email,
+                    'id': key.get('client_uuid'),
+                    'password': key.get('client_uuid'),
+                    'enable': active,
+                }
+
+            min_inb_id = min(presence.keys()) if presence else None
+            if min_inb_id is not None and len(presence) > 1:
+                for inb_id, cl in list(presence.items()):
+                    if inb_id == min_inb_id:
+                        continue
+                    cid = _client_identifier(cl)
+                    if not cid:
+                        stats['errors'] += 1
+                        continue
+                    try:
+                        await client.delete_client(inb_id, cid)
+                        stats['deleted'] += 1
+                        presence.pop(inb_id, None)
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys (key-mode): не удалось удалить {email} "
+                            f"из inbound {inb_id} сервера {server_id}: {e}"
                         )
-                return stats
 
-            min_inb_id = min(presence.keys())
-            for inb_id, cl in list(presence.items()):
-                if inb_id == min_inb_id:
-                    continue
-                cid = cl.get('id') or cl.get('password')
-                if not cid:
-                    continue
-                try:
-                    await client.delete_client(inb_id, cid)
-                    stats['deleted'] += 1
-                    presence.pop(inb_id, None)
-                except Exception as e:
-                    logger.warning(
-                        f"ensure_subscription_keys (key-mode): не удалось удалить {email} "
-                        f"из inbound {inb_id} сервера {server_id}: {e}"
-                    )
-
-            min_client = presence.get(min_inb_id)
+            min_client = presence.get(min_inb_id) if min_inb_id is not None else None
             if min_client:
-                uuid_or_pwd = min_client.get('id') or min_client.get('password') or ''
+                uuid_or_pwd = _client_identifier(min_client)
                 if (key.get('panel_inbound_id') != min_inb_id
                         or (key.get('client_uuid') or '') != uuid_or_pwd):
                     update_vpn_key_config(
@@ -625,8 +630,51 @@ async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
                         panel_email=email,
                         client_uuid=uuid_or_pwd,
                     )
+                if reset_traffic:
+                    try:
+                        await client.reset_client_traffic(min_inb_id, email)
+                        stats['reset'] += 1
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys (key-mode): не удалось сбросить трафик "
+                            f"{email} в inbound {min_inb_id}: {e}"
+                        )
+                try:
+                    await client.update_client_full(
+                        inbound_id=min_inb_id,
+                        client_uuid=uuid_or_pwd,
+                        email=email,
+                        expiry_time_ms=expiry_time_ms,
+                        total_gb_bytes=traffic_limit,
+                        enable=active,
+                    )
+                    stats['updated'] += 1
+                    if bool(min_client.get('enable', True)) != active:
+                        if active:
+                            stats['enabled'] += 1
+                        else:
+                            stats['disabled'] += 1
+                except Exception as e:
+                    stats['errors'] += 1
+                    logger.warning(
+                        f"ensure_subscription_keys (key-mode): не удалось обновить клиента "
+                        f"{email} в inbound {min_inb_id}: {e}"
+                    )
 
+    stats['ok'] = 1 if stats['errors'] == 0 else 0
     return stats
+
+
+async def sync_key_to_panel_state(key_id: int, reset_traffic: bool = False) -> Dict[str, int]:
+    """
+    Единая точка синхронизации состояния ключа из БД на панель.
+
+    Для subscription-режима обновляет всех клиентов с одним email/subId во всех
+    inbound. Для key-режима обновляет основной клиент и чистит лишние через ту
+    же материализацию состояния.
+    """
+    return await ensure_subscription_keys_on_server(key_id, reset_traffic=reset_traffic)
 
 
 async def get_subscription_url_for_key(key: Dict[str, Any]) -> Optional[str]:
@@ -657,5 +705,6 @@ __all__ = [
     "reset_key_traffic_if_active", "extend_key_on_server", "restore_key_traffic_limit",
     "push_key_to_panel", "restore_traffic_limit_in_db",
     "get_bot_mode", "is_subscription_mode",
-    "ensure_subscription_keys_on_server", "get_subscription_url_for_key",
+    "ensure_subscription_keys_on_server", "sync_key_to_panel_state",
+    "get_subscription_url_for_key",
 ]

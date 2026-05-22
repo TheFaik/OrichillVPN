@@ -33,14 +33,14 @@ def get_all_tariffs(include_hidden: bool = False) -> List[Dict[str, Any]]:
         if include_hidden:
             cursor = conn.execute("""
                 SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
-                       display_order, is_active, traffic_limit_gb, group_id
+                       display_order, is_active, traffic_limit_gb, group_id, max_ips
                 FROM tariffs
                 ORDER BY display_order, id
             """)
         else:
             cursor = conn.execute("""
                 SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
-                       display_order, is_active, traffic_limit_gb, group_id
+                       display_order, is_active, traffic_limit_gb, group_id, max_ips
                 FROM tariffs
                 WHERE is_active = 1
                 ORDER BY display_order, id
@@ -60,7 +60,7 @@ def get_tariff_by_id(tariff_id: int) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
-                   display_order, is_active, traffic_limit_gb, group_id
+                   display_order, is_active, traffic_limit_gb, group_id, max_ips
             FROM tariffs
             WHERE id = ?
         """, (tariff_id,))
@@ -75,7 +75,8 @@ def add_tariff(
     price_rub: int = 0,
     display_order: int = 0,
     traffic_limit_gb: int = 0,
-    group_id: int = 1
+    group_id: int = 1,
+    max_ips: int = 1
 ) -> int:
     """
     Добавляет новый тариф.
@@ -89,6 +90,7 @@ def add_tariff(
         display_order: Порядок отображения
         traffic_limit_gb: Лимит трафика в ГБ (0 = безлимит)
         group_id: ID группы тарифов (по умолчанию 1 — «Основная»)
+        max_ips: Лимит устройств (IP-адресов) (по умолчанию 1)
         
     Returns:
         ID созданного тарифа
@@ -96,11 +98,11 @@ def add_tariff(
     with get_db() as conn:
         cursor = conn.execute("""
             INSERT INTO tariffs (name, duration_days, price_cents, price_stars, price_rub, 
-                                display_order, is_active, traffic_limit_gb, group_id)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-        """, (name, duration_days, price_cents, price_stars, price_rub, display_order, traffic_limit_gb, group_id))
+                                display_order, is_active, traffic_limit_gb, group_id, max_ips)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        """, (name, duration_days, price_cents, price_stars, price_rub, display_order, traffic_limit_gb, group_id, max_ips))
         tariff_id = cursor.lastrowid
-        logger.info(f"Добавлен тариф: {name} (ID: {tariff_id}, трафик: {traffic_limit_gb} ГБ, группа: {group_id})")
+        logger.info(f"Добавлен тариф: {name} (ID: {tariff_id}, трафик: {traffic_limit_gb} ГБ, группа: {group_id}, max_ips: {max_ips})")
         return tariff_id
 
 def update_tariff(tariff_id: int, **fields) -> bool:
@@ -115,7 +117,7 @@ def update_tariff(tariff_id: int, **fields) -> bool:
         True если обновление успешно
     """
     allowed_fields = {'name', 'duration_days', 'price_cents', 'price_stars', 'price_rub',
-                      'display_order', 'is_active', 'group_id', 'traffic_limit_gb'}
+                      'display_order', 'is_active', 'group_id', 'traffic_limit_gb', 'max_ips'}
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
     if not fields:
@@ -199,7 +201,7 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
-                   display_order, is_active
+                   display_order, is_active, max_ips
             FROM tariffs
             WHERE name = 'Admin Tariff'
             LIMIT 1
@@ -211,8 +213,8 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
         
         # Если тариф не найден, создаём его
         cursor = conn.execute("""
-            INSERT INTO tariffs (name, duration_days, price_cents, price_stars, price_rub, display_order, is_active)
-            VALUES ('Admin Tariff', 30, 0, 0, 0, 999, 0)
+            INSERT INTO tariffs (name, duration_days, price_cents, price_stars, price_rub, display_order, is_active, max_ips)
+            VALUES ('Admin Tariff', 30, 0, 0, 0, 999, 0, 1)
         """)
         logger.info("Создан Admin Tariff")
         
@@ -224,7 +226,8 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
             'price_stars': 0,
             'price_rub': 0,
             'display_order': 999,
-            'is_active': 0
+            'is_active': 0,
+            'max_ips': 1
         }
 
 

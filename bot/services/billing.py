@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any, Tuple
 
 from database.requests import (
     find_order_by_order_id, complete_order, is_order_already_paid,
-    get_vpn_key_by_id, extend_vpn_key, get_setting,
+    get_setting,
     get_yookassa_credentials, get_wata_token, get_platega_credentials,
     get_cardlink_credentials,
     is_referral_enabled, get_referral_reward_type, get_active_referral_levels,
@@ -165,7 +165,7 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
     """
     from database.requests import (
         is_order_already_paid, find_order_by_order_id, complete_order, 
-        extend_vpn_key, create_initial_vpn_key, update_payment_key_id
+        create_initial_vpn_key, update_payment_key_id
     )
     
     # 1. Проверка на дубликат (на всякий случай, если вызывающий не проверил)
@@ -194,28 +194,15 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
     days = order.get('period_days') or order.get('duration_days') or 30
 
     if order['vpn_key_id']:
-        if days and extend_vpn_key(order['vpn_key_id'], days):
+        from bot.services.key_lifecycle import renew_key_access
+        renew_result = await renew_key_access(order['vpn_key_id'], days, reset_traffic=True)
+        if days and renew_result['db_updated']:
             logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
-            
-            from bot.services.vpn_api import (
-                push_key_to_panel, restore_traffic_limit_in_db,
-                ensure_subscription_keys_on_server,
-            )
-            from database.requests import get_vpn_key_by_id
-            # Восстанавливаем лимит трафика в БД (без обращения к панели)
-            restore_traffic_limit_in_db(order['vpn_key_id'])
-            # Пушим ВСЕ данные из БД на панель одним вызовом (сброс up/down + обновление)
-            await push_key_to_panel(order['vpn_key_id'], reset_traffic=True)
-            # Subscription: зеркалим обновлённые totalGB/expiryTime/enable на все inbound
-            _renewed_key = get_vpn_key_by_id(order['vpn_key_id'])
-            if _renewed_key and _renewed_key.get('sub_id'):
-                try:
-                    await ensure_subscription_keys_on_server(order['vpn_key_id'])
-                except Exception as _e:
-                    logger.warning(
-                        f"renew: ensure_subscription_keys_on_server({order['vpn_key_id']}) "
-                        f"не удался: {_e}"
-                    )
+            if not renew_result['panel_synced']:
+                logger.warning(
+                    f"Ключ {order['vpn_key_id']} продлён в БД, но панель синхронизирована "
+                    f"не полностью: {renew_result.get('sync_stats')}"
+                )
 
             if order.get('payment_type') == 'crypto':
                 await process_referral_reward(user_internal_id, days, order.get('amount_cents', 0), 'crypto')

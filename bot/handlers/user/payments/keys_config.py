@@ -140,7 +140,7 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
                     email=panel_email,
                     total_gb=limit_gb,
                     expire_days=days,
-                    limit_ip=1,
+                    limit_ip=_tariff_data.get('max_ips', 1) if _tariff_data else 1,
                     enable=True,
                     tg_id=str(telegram_id),
                     flow=flow,
@@ -167,6 +167,10 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
             sub_id=sub_id,
         )
         update_payment_key_id(order_id, key_id)
+        from bot.services.vpn_api import sync_key_to_panel_state
+        sync_stats = await sync_key_to_panel_state(key_id)
+        if not sync_stats.get('ok'):
+            logger.warning(f"subscription_final: ключ {key_id} синхронизирован не полностью: {sync_stats}")
 
         await state.clear()
         new_key = get_key_details_for_user(key_id, telegram_id)
@@ -228,7 +232,7 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
         _tariff_data = _get_tariff_for_limit(order['tariff_id'])
         limit_gb = (_tariff_data.get('traffic_limit_gb', 0) or 0) if _tariff_data else 0
         flow = await client.get_inbound_flow(inbound_id)
-        res = await client.add_client(inbound_id=inbound_id, email=panel_email, total_gb=limit_gb, expire_days=days, limit_ip=1, enable=True, tg_id=str(telegram_id), flow=flow)
+        res = await client.add_client(inbound_id=inbound_id, email=panel_email, total_gb=limit_gb, expire_days=days, limit_ip=_tariff_data.get('max_ips', 1) if _tariff_data else 1, enable=True, tg_id=str(telegram_id), flow=flow)
         client_uuid = res['uuid']
         update_vpn_key_config(key_id=key_id, server_id=server_id, panel_inbound_id=inbound_id, panel_email=panel_email, client_uuid=client_uuid)
         update_payment_key_id(order_id, key_id)

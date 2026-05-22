@@ -9,6 +9,7 @@ from config import ADMIN_IDS
 from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, extend_vpn_key, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
 from bot.utils.admin import is_admin
 from bot.utils.text import escape_html, safe_edit_or_send
+from bot.utils.panel_email import get_panel_email_prefix
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_server_kb, add_key_inbound_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, back_and_home_kb, home_only_kb
 from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
@@ -79,21 +80,8 @@ def _format_user_card(user: dict) -> tuple[str, any]:
         
     lines.append(f'📱 Telegram ID: <code>{telegram_id}</code>')
     
-    unique_emails = set()
-    for key in vpn_keys:
-        if key.get('panel_email'):
-            unique_emails.add(key['panel_email'])
-            
-    if unique_emails:
-        emails_str = ', '.join(f'<code>{escape_html(e)}</code>' for e in unique_emails)
-    else:
-        if username:
-            fallback = f"user_{username}"
-        else:
-            fallback = f"user_{telegram_id}"
-        emails_str = f'<code>{escape_html(fallback)}</code>'
-        
-    lines.append(f'📧 E-mail в панели: {emails_str}')
+    panel_email_prefix = get_panel_email_prefix(user)
+    lines.append(f'📧 E-mail в панели: <code>{escape_html(panel_email_prefix)}</code>')
     lines.append(f'📅 Зарегистрирован: {created_at}')
     
     balance_rub = balance_cents / 100

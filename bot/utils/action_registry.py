@@ -156,6 +156,140 @@ def _resolve_pay_balance(ctx: dict) -> Optional[dict]:
     return {"callback_data": "pay_use_balance"}
 
 
+def _get_renew_key_id(ctx: dict) -> Optional[str]:
+    """Возвращает key_id для кнопок продления или скрывает кнопку без контекста."""
+    key_id = ctx.get('key_id')
+    if key_id is None or key_id == '':
+        return None
+    return str(key_id)
+
+
+def _resolve_renew_pay_crypto(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через крипто-оплату (USDT)."""
+    from database.requests import is_crypto_configured
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_crypto_configured():
+        return None
+
+    return {"callback_data": f"renew_crypto_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_stars(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через Telegram Stars."""
+    from database.requests import is_stars_enabled
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_stars_enabled():
+        return None
+
+    return {"callback_data": f"renew_stars_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_cards(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через Telegram Payments."""
+    from database.requests import is_cards_enabled
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_cards_enabled():
+        return None
+
+    return {"callback_data": f"renew_cards_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_qr(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через QR-оплату ЮКассы."""
+    from database.requests import is_yookassa_qr_configured
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_yookassa_qr_configured():
+        return None
+
+    return {"callback_data": f"renew_qr_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_wata(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через WATA."""
+    from database.requests import is_wata_configured
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_wata_configured():
+        return None
+
+    return {"callback_data": f"renew_wata_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_platega(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через Platega."""
+    from database.requests import is_platega_configured
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_platega_configured():
+        return None
+
+    return {"callback_data": f"renew_platega_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_cardlink(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через Cardlink."""
+    from database.requests import is_cardlink_configured
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_cardlink_configured():
+        return None
+
+    return {"callback_data": f"renew_cardlink_tariff:{key_id}"}
+
+
+def _resolve_renew_pay_demo(ctx: dict) -> Optional[dict]:
+    """Кнопка продления через демонстрационную оплату."""
+    from database.requests import is_demo_payment_enabled
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id or not is_demo_payment_enabled():
+        return None
+
+    return {"callback_data": f"renew_demo_tariffs:{key_id}"}
+
+
+def _resolve_renew_pay_balance(ctx: dict) -> Optional[dict]:
+    """Кнопка продления с внутреннего баланса."""
+    from database.requests import (
+        is_referral_enabled, get_referral_reward_type,
+        get_user_balance, get_user_internal_id,
+    )
+
+    key_id = _get_renew_key_id(ctx)
+    if not key_id:
+        return None
+
+    if not is_referral_enabled() or get_referral_reward_type() != 'balance':
+        return None
+
+    telegram_id = ctx.get('telegram_id')
+    if not telegram_id:
+        return None
+
+    user_id = get_user_internal_id(telegram_id)
+    if not user_id:
+        return None
+
+    balance_cents = get_user_balance(user_id)
+    if balance_cents <= 0:
+        return None
+
+    return {"callback_data": f"pay_use_balance:{key_id}"}
+
+
+def _resolve_renew_back(ctx: dict) -> Optional[dict]:
+    """Кнопка возврата со страницы выбора оплаты продления к ключу."""
+    key_id = _get_renew_key_id(ctx)
+    if not key_id:
+        return None
+
+    return {"callback_data": f"key:{key_id}"}
+
+
 
 # Карта: button_id → handler
 SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
@@ -168,4 +302,14 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_pay_cardlink": _resolve_pay_cardlink,
     "btn_pay_demo":    _resolve_pay_demo,
     "btn_pay_balance": _resolve_pay_balance,
+    "btn_renew_pay_crypto": _resolve_renew_pay_crypto,
+    "btn_renew_pay_stars": _resolve_renew_pay_stars,
+    "btn_renew_pay_cards": _resolve_renew_pay_cards,
+    "btn_renew_pay_qr": _resolve_renew_pay_qr,
+    "btn_renew_pay_wata": _resolve_renew_pay_wata,
+    "btn_renew_pay_platega": _resolve_renew_pay_platega,
+    "btn_renew_pay_cardlink": _resolve_renew_pay_cardlink,
+    "btn_renew_pay_demo": _resolve_renew_pay_demo,
+    "btn_renew_pay_balance": _resolve_renew_pay_balance,
+    "btn_renew_back": _resolve_renew_back,
 }
