@@ -17,7 +17,7 @@ sudo apt update && sudo apt install -y python3-venv python3-pip git
 ### Шаг 2: Клонирование репозитория
 Скачайте проект с GitHub:
 ```bash
-git clone https://github.com/TheFaik/OrichillVPN.git
+git clone https://github.com/OrichillVPN/OrichillVPN.git
 cd OrichillVPN
 ```
 

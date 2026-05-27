@@ -17,7 +17,7 @@
 set -e
 
 INSTALL_DIR="/root/OrichillVPN"
-REPO_URL="https://github.com/OrichillVPN/OrichillVPN.git"
+REPO_URL="https://github.com/TheFaik/OrichillVPN.git"
 VENV_DIR="$INSTALL_DIR/venv"
 SERVICE_FILE="orichill-vpn.service"
 

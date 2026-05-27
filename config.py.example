@@ -15,7 +15,7 @@ ADMIN_IDS = [
 
 # Ссылка на GitHub репозиторий для автообновления
 # Формат: https://github.com/username/repo.git или git@github.com:username/repo.git
-GITHUB_REPO_URL = "https://github.com/OrichillVPN/OrichillVPN.git"  # Укажите URL вашего репозитория
+GITHUB_REPO_URL = "https://github.com/TheFaik/OrichillVPN.git"  # Укажите URL вашего репозитория
 
 # Client Configuration Defaults
 DEFAULT_LIMIT_IP = 1  # Ограничение кол-ва одновременных подключений (1 ключ = 1 устройство)
