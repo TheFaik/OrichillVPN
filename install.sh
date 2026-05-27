@@ -224,7 +224,7 @@ do_install() {
 
     # Клонирование репозитория
     print_header "Загрузка ORICHILL VPN"
-    git clone "$REPO_URL" "$INSTALL_DIR" -q
+    GIT_TERMINAL_PROMPT=0 git clone --config credential.helper= "$REPO_URL" "$INSTALL_DIR" -q
     cd "$INSTALL_DIR"
     print_ok "Репозиторий клонирован"
 
