@@ -139,7 +139,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
             from bot.errors import TariffNotFoundError
             if isinstance(e, TariffNotFoundError):
                 from bot.keyboards.user import support_kb
-                support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+                support_link = get_setting('support_channel_link', 'https://t.me/OrichillChat')
                 await safe_edit_or_send(message, str(e), reply_markup=support_kb(support_link), force_new=True)
             else:
                 logger.exception(f'Ошибка обработки платежа: {e}')

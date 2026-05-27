@@ -78,7 +78,7 @@ def verify_crypto_signature(data_part: str, received_signature: str, secret_key:
     
     Подпись = Base62(HMAC-SHA256(data_part, secret_key)[:11]).
     
-    Алгоритм согласно документации https://yadreno.ru/seller/integration.php:
+    Алгоритм согласно документации https://orichill.ru/seller/integration.php:
     1. Вычисляем HMAC-SHA256 от data_part с секретным ключом
     2. Берем первые 11 байт бинарного результата
     3. Кодируем в Base62
@@ -1276,7 +1276,7 @@ async def complete_payment_flow(
         from bot.errors import TariffNotFoundError
         if isinstance(e, TariffNotFoundError):
             from bot.keyboards.user import support_kb
-            support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+            support_link = get_setting('support_channel_link', 'https://t.me/OrichillChat')
             await message.answer(str(e), reply_markup=support_kb(support_link), parse_mode='HTML')
         else:
             logger.exception(f'Ошибка обработки {payment_type} платежа: {e}')

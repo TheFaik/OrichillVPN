@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 API_PROFILE_LEGACY = "legacy_inbounds"
 API_PROFILE_CLIENTS = "clients_api"
-BOT_API_TOKEN_NAME = "YadrenoVPN Bot"
+BOT_API_TOKEN_NAME = "ORICHILL Bot"
 JSON_INBOUND_FIELDS = ("settings", "streamSettings", "sniffing")
 
 
@@ -496,7 +496,7 @@ class XUIClient(BaseVPNClient):
         Тянет Bearer-токен с панели v3.0+.
 
         На v3.0.2+/v3.1.0 использует /panel/setting/apiTokens:
-        - берёт enabled token с именем YadrenoVPN Bot;
+        - берёт enabled token с именем ORICHILL Bot;
         - если токена нет, создаёт его;
         - если токен найден disabled, не включает его обратно и остаётся CSRF.
 
@@ -2390,6 +2390,98 @@ class XUIClient(BaseVPNClient):
         limit_gb = total_gb_bytes / (1024**3)
         logger.info(f"Обновлён лимит клиента {email}: {limit_gb:.1f} ГБ")
         return True
+
+    async def add_clients_batch(
+        self,
+        inbound_id: int,
+        base_email: str,
+        count: int = 5,
+        total_gb: int = 0,
+        expire_days: int = 30,
+        limit_ip: int = 1,
+        enable: bool = True,
+        tg_id: str = "",
+        flow: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Создаёт несколько ключей с одним общим sub_id (одна подписка).
+
+        Все ключи будут доступны по одной ссылке /sub/{sub_id}, потому что
+        панель группирует клиентов по sub_id.
+
+        Args:
+            inbound_id: ID inbound-подключения
+            base_email: Базовый email; ключи получат суффиксы _1, _2, … _N.
+                        Например base_email='user_42' → 'user_42_1' ... 'user_42_5'
+            count: Количество создаваемых ключей (по умолчанию 5)
+            total_gb: Лимит трафика в ГБ на каждый ключ (0 = без лимита)
+            expire_days: Срок действия в днях
+            limit_ip: Ограничение по IP на каждый ключ
+            enable: Активны ли ключи сразу
+            tg_id: Telegram ID для уведомлений панели
+            flow: Параметр flow (напр. 'xtls-rprx-vision')
+
+        Returns:
+            Словарь:
+            {
+                "sub_id": str,           # Общий sub_id для всех ключей
+                "sub_url": str | None,   # Готовая ссылка подписки (если удалось собрать)
+                "clients": [             # Список созданных клиентов
+                    {"uuid": ..., "email": ..., "expire_time": ..., ...},
+                    ...
+                ],
+                "errors": [...]          # Список ошибок {"email": ..., "error": ...}
+            }
+        """
+        if count < 1:
+            raise ValueError("count должен быть >= 1")
+
+        # Один shared sub_id на все ключи — это и есть «одна подписка»
+        shared_sub_id = uuid.uuid4().hex
+
+        clients: List[Dict[str, Any]] = []
+        errors: List[Dict[str, str]] = []
+
+        for i in range(1, count + 1):
+            email = f"{base_email}_{i}"
+            try:
+                result = await self.add_client(
+                    inbound_id=inbound_id,
+                    email=email,
+                    total_gb=total_gb,
+                    expire_days=expire_days,
+                    limit_ip=limit_ip,
+                    enable=enable,
+                    tg_id=tg_id,
+                    flow=flow,
+                    sub_id=shared_sub_id,
+                )
+                clients.append(result)
+                logger.info(
+                    f"[batch] Создан ключ {i}/{count} для подписки {shared_sub_id}: email={email}"
+                )
+            except Exception as e:
+                logger.error(f"[batch] Не удалось создать ключ {email}: {e}")
+                errors.append({"email": email, "error": str(e)})
+
+        # Пробуем сразу собрать ссылку подписки
+        sub_url: Optional[str] = None
+        try:
+            sub_url = await self.build_subscription_url(shared_sub_id)
+        except Exception as e:
+            logger.debug(f"[batch] Не удалось собрать sub_url: {e}")
+
+        logger.info(
+            f"[batch] Завершено: {len(clients)}/{count} ключей, "
+            f"sub_id={shared_sub_id}, sub_url={sub_url}"
+        )
+
+        return {
+            "sub_id": shared_sub_id,
+            "sub_url": sub_url,
+            "clients": clients,
+            "errors": errors,
+        }
 
     async def close(self):
         """Закрывает сессию."""

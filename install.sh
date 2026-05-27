@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Yadreno VPN — скрипт установки и управления
-# Запуск: bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh)
+# ORICHILL VPN — скрипт установки и управления
+# Запуск: bash <(curl -sL https://raw.githubusercontent.com/OrichillVPN/OrichillVPN/main/install.sh)
 # 
 # === АВТОМАТИЧЕСКИЙ ЗАПУСК (БЕЗ ДИАЛОГОВ) ===
 #
 # 1. Запуск прямо с GitHub (для чистой установки или если папки ещё нет):
-# bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) install <BOT_TOKEN> <ADMIN_ID>
-# bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) update [COMMIT_OR_BRANCH]
-# bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) reset [COMMIT_OR_BRANCH]
+# bash <(curl -sL https://raw.githubusercontent.com/OrichillVPN/OrichillVPN/main/install.sh) install <BOT_TOKEN> <ADMIN_ID>
+# bash <(curl -sL https://raw.githubusercontent.com/OrichillVPN/OrichillVPN/main/install.sh) update [COMMIT_OR_BRANCH]
+# bash <(curl -sL https://raw.githubusercontent.com/OrichillVPN/OrichillVPN/main/install.sh) reset [COMMIT_OR_BRANCH]
 #
 # 2. Локальный запуск (если репозиторий уже установлен и нужно просто обновить/сбросить):
 # bash install.sh update [COMMIT_OR_BRANCH]
@@ -16,10 +16,10 @@
 
 set -e
 
-INSTALL_DIR="/root/YadrenoVPN"
-REPO_URL="https://github.com/plushkinv/YadrenoVPN.git"
+INSTALL_DIR="/root/OrichillVPN"
+REPO_URL="https://github.com/OrichillVPN/OrichillVPN.git"
 VENV_DIR="$INSTALL_DIR/venv"
-SERVICE_FILE="yadreno-vpn.service"
+SERVICE_FILE="orichill-vpn.service"
 
 # Цвета для вывода
 RED='\033[0;31m'
@@ -145,7 +145,7 @@ setup_systemd() {
 
     cat > "$INSTALL_DIR/$SERVICE_FILE" << EOF
 [Unit]
-Description=Yadreno VPN Bot
+Description=ORICHILL VPN Bot
 After=network.target
 
 [Service]
@@ -162,22 +162,22 @@ EOF
 
     cp "$INSTALL_DIR/$SERVICE_FILE" /etc/systemd/system/
     systemctl daemon-reload
-    systemctl enable yadreno-vpn > /dev/null 2>&1
+    systemctl enable orichill-vpn > /dev/null 2>&1
 
     print_ok "systemd сервис установлен и включён в автозапуск"
 }
 
 # Запуск сервиса
 start_service() {
-    systemctl start yadreno-vpn
+    systemctl start orichill-vpn
     sleep 2
 
-    if systemctl is-active --quiet yadreno-vpn; then
+    if systemctl is-active --quiet orichill-vpn; then
         print_ok "Бот запущен и работает!"
     else
         print_err "Бот не запустился. Проверьте логи:"
-        echo "  systemctl status yadreno-vpn"
-        echo "  journalctl -u yadreno-vpn -n 50"
+        echo "  systemctl status orichill-vpn"
+        echo "  journalctl -u orichill-vpn -n 50"
     fi
 }
 
@@ -185,11 +185,11 @@ start_service() {
 # ПУНКТ 1: УСТАНОВКА
 # ============================================================
 do_install() {
-    print_header "🚀 Установка Yadreno VPN"
+    print_header "🚀 Установка ORICHILL VPN"
 
     # Проверяем, не установлен ли уже
     if [ -d "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR/.git" ]; then
-        print_warn "Yadreno VPN уже установлен в $INSTALL_DIR"
+        print_warn "ORICHILL VPN уже установлен в $INSTALL_DIR"
         if [ "$AUTO_MODE" = "1" ]; then
             print_warn "Автоматический режим: принудительная переустановка"
             reinstall_choice="1"
@@ -203,14 +203,14 @@ do_install() {
             echo "Установка отменена."
             return 0
         fi
-        systemctl stop yadreno-vpn 2>/dev/null || true
+        systemctl stop orichill-vpn 2>/dev/null || true
         # Сохраняем config.py и базу данных
         if [ -f "$INSTALL_DIR/config.py" ]; then
-            cp "$INSTALL_DIR/config.py" /tmp/yadreno_config_backup.py
+            cp "$INSTALL_DIR/config.py" /tmp/orichill_config_backup.py
             BACKUP_CONFIG=1
         fi
         if [ -f "$INSTALL_DIR/vpn_bot.db" ]; then
-            cp "$INSTALL_DIR/vpn_bot.db" /tmp/yadreno_db_backup.db
+            cp "$INSTALL_DIR/vpn_bot.db" /tmp/orichill_db_backup.db
             BACKUP_DB=1
         fi
         rm -rf "$INSTALL_DIR"
@@ -223,21 +223,21 @@ do_install() {
     install_system_deps
 
     # Клонирование репозитория
-    print_header "Загрузка Yadreno VPN"
+    print_header "Загрузка ORICHILL VPN"
     git clone "$REPO_URL" "$INSTALL_DIR" -q
     cd "$INSTALL_DIR"
     print_ok "Репозиторий клонирован"
 
     # Восстановление backup'ов при переустановке
-    if [ "$BACKUP_CONFIG" = "1" ] && [ -f "/tmp/yadreno_config_backup.py" ]; then
-        cp /tmp/yadreno_config_backup.py "$INSTALL_DIR/config.py"
-        rm /tmp/yadreno_config_backup.py
+    if [ "$BACKUP_CONFIG" = "1" ] && [ -f "/tmp/orichill_config_backup.py" ]; then
+        cp /tmp/orichill_config_backup.py "$INSTALL_DIR/config.py"
+        rm /tmp/orichill_config_backup.py
         print_ok "config.py восстановлен из резервной копии"
         NEED_WRITE_CONFIG=0
     fi
-    if [ "$BACKUP_DB" = "1" ] && [ -f "/tmp/yadreno_db_backup.db" ]; then
-        cp /tmp/yadreno_db_backup.db "$INSTALL_DIR/vpn_bot.db"
-        rm /tmp/yadreno_db_backup.db
+    if [ "$BACKUP_DB" = "1" ] && [ -f "/tmp/orichill_db_backup.db" ]; then
+        cp /tmp/orichill_db_backup.db "$INSTALL_DIR/vpn_bot.db"
+        rm /tmp/orichill_db_backup.db
         print_ok "База данных восстановлена из резервной копии"
     fi
 
@@ -258,10 +258,10 @@ do_install() {
     echo -e "  Директория: ${GREEN}$INSTALL_DIR${NC}"
     echo -e "  Виртуальное окружение: ${GREEN}$VENV_DIR${NC}"
     echo -e "  Управление сервисом:"
-    echo -e "    ${CYAN}systemctl status yadreno-vpn${NC}   — статус"
-    echo -e "    ${CYAN}systemctl restart yadreno-vpn${NC}  — перезапуск"
-    echo -e "    ${CYAN}systemctl stop yadreno-vpn${NC}     — остановка"
-    echo -e "    ${CYAN}journalctl -u yadreno-vpn -f${NC}   — логи"
+    echo -e "    ${CYAN}systemctl status orichill-vpn${NC}   — статус"
+    echo -e "    ${CYAN}systemctl restart orichill-vpn${NC}  — перезапуск"
+    echo -e "    ${CYAN}systemctl stop orichill-vpn${NC}     — остановка"
+    echo -e "    ${CYAN}journalctl -u orichill-vpn -f${NC}   — логи"
 }
 
 # ============================================================
@@ -271,7 +271,7 @@ do_soft_update() {
     print_header "🔄 Мягкое обновление"
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
-        print_err "Yadreno VPN не установлен в $INSTALL_DIR"
+        print_err "ORICHILL VPN не установлен в $INSTALL_DIR"
         return 1
     fi
 
@@ -305,14 +305,14 @@ do_soft_update() {
     print_ok "Зависимости обновлены"
 
     # Перезапуск
-    systemctl restart yadreno-vpn
+    systemctl restart orichill-vpn
     sleep 2
 
-    if systemctl is-active --quiet yadreno-vpn; then
+    if systemctl is-active --quiet orichill-vpn; then
         print_ok "Бот перезапущен и работает!"
     else
         print_err "Бот не запустился после обновления"
-        echo "  systemctl status yadreno-vpn"
+        echo "  systemctl status orichill-vpn"
     fi
 }
 
@@ -323,7 +323,7 @@ do_hard_reset() {
     print_header "⚠️  Жёсткая перезапись"
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
-        print_err "Yadreno VPN не установлен в $INSTALL_DIR"
+        print_err "ORICHILL VPN не установлен в $INSTALL_DIR"
         return 1
     fi
 
@@ -358,14 +358,14 @@ do_hard_reset() {
     print_ok "Зависимости обновлены"
 
     # Перезапуск
-    systemctl restart yadreno-vpn
+    systemctl restart orichill-vpn
     sleep 2
 
-    if systemctl is-active --quiet yadreno-vpn; then
+    if systemctl is-active --quiet orichill-vpn; then
         print_ok "Бот перезапущен и работает!"
     else
         print_err "Бот не запустился после перезаписи"
-        echo "  systemctl status yadreno-vpn"
+        echo "  systemctl status orichill-vpn"
     fi
 }
 
@@ -376,7 +376,7 @@ show_menu() {
     clear
     echo -e "${CYAN}"
     echo "  ╔═══════════════════════════════════════╗"
-    echo "  ║       🌐 Yadreno VPN Manager         ║"
+    echo "  ║       🌐 ORICHILL VPN Manager         ║"
     echo "  ╚═══════════════════════════════════════╝"
     echo -e "${NC}"
     echo "  1) 🚀 Установка"

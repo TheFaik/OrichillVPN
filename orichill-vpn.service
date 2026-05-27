@@ -1,12 +1,12 @@
 [Unit]
-Description=Yadreno VPN Bot
+Description=ORICHILL VPN Bot
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/YadrenoVPN
-ExecStart=/root/YadrenoVPN/venv/bin/python main.py
+WorkingDirectory=/root/OrichillVPN
+ExecStart=/root/OrichillVPN/venv/bin/python main.py
 Restart=always
 RestartSec=5
 

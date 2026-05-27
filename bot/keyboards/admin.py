@@ -9,7 +9,6 @@ from .admin_groups import *
 from .admin_broadcast import *
 from .admin_users import *
 from .admin_settings import *
-from .admin_yadreno import *
 
 __all__ = [
     'BROADCAST_FILTERS',
@@ -21,7 +20,6 @@ __all__ = [
     'back_and_home_kb',
     'home_only_kb',
     'admin_main_menu_kb',
-    'author_support_kb',
     'admin_logs_menu_kb',
     'stop_bot_confirm_kb',
     'bot_settings_kb',
@@ -80,8 +78,4 @@ __all__ = [
     'referral_main_kb',
     'referral_level_kb',
     'referral_back_kb',
-    'yadreno_admin_no_key_kb',
-    'yadreno_admin_chat_kb',
-    'yadreno_admin_agent_kb',
-    'yadreno_admin_cancel_key_kb',
 ]
